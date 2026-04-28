@@ -53,6 +53,13 @@ setup(
             "ipython==8.34.0",
             "black==24.2.0",
             "pytest==8.2.0"
+        ],
+        "face": [
+            "facenet-pytorch",
+            "mediapipe"
+        ],
+        "flux2": [
+            "flux2 @ git+https://github.com/black-forest-labs/flux2.git"
         ]
     }
 )

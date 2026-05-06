@@ -112,6 +112,8 @@ Memory usage can be reduced by lowering `--mem-fraction-static`, limiting `--max
 ## Training
 Unlike FlowGRPO, we use `torchrun` instead of `accelerate` to distribute training. The default configuration file `config/nft.py` is set for 8 GPUs, and you can customize it as needed.
 
+For the **small-face edit SFT/RL pipeline** — including overall training stages, dataset materialization (WIDER-FACE / MagicBrush / canonical JSONL), Flux2/SD3 launch commands, reward/loss details, LoRA paths, and a full code map — see the dedicated guide **[docs/face_edit_training.md](docs/face_edit_training.md)**.
+
 Single-node training example:
 ```bash
 export WANDB_API_KEY=xxx

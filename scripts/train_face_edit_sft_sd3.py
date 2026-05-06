@@ -20,6 +20,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
+from flow_grpo.device_utils import get_device, get_grad_scaler, get_amp_context, get_pin_memory
 from flow_grpo.editing_data import FaceEditDataset, collate_edit_samples
 from flow_grpo.face_edit_losses import robust_edit_supervision_loss
 from flow_grpo.sd3_edit_train_utils import (
@@ -65,7 +66,7 @@ def parse_args():
 def main():
     args = parse_args()
     rank, world_size, local_rank = setup_distributed()
-    device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
+    device = get_device(local_rank)
     dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "no": torch.float32}[args.mixed_precision]
     amp_enabled = args.mixed_precision != "no"
 
@@ -88,7 +89,7 @@ def main():
         shuffle=sampler is None,
         num_workers=args.num_workers,
         collate_fn=collate_edit_samples,
-        pin_memory=True,
+        pin_memory=get_pin_memory(device),
     )
 
     pipeline = StableDiffusion3Pipeline.from_pretrained(args.pretrained_model)
@@ -112,7 +113,7 @@ def main():
         transformer = DDP(transformer, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=False)
 
     optimizer = torch.optim.AdamW(trainable_params, lr=args.learning_rate, weight_decay=1e-4)
-    scaler = torch.cuda.amp.GradScaler(enabled=args.mixed_precision == "fp16")
+    scaler = get_grad_scaler(device.type, enabled=args.mixed_precision == "fp16")
     text_encoders = [pipeline.text_encoder, pipeline.text_encoder_2, pipeline.text_encoder_3]
     tokenizers = [pipeline.tokenizer, pipeline.tokenizer_2, pipeline.tokenizer_3]
 
@@ -138,7 +139,7 @@ def main():
             xt, target_v = make_edit_flow_noisy_latents(target_latents, source_latents, t, source_mix=args.source_mix)
             timesteps = (t * 1000).long()
 
-            with torch.cuda.amp.autocast(enabled=amp_enabled, dtype=dtype):
+            with get_amp_context(device.type, enabled=amp_enabled, dtype=dtype):
                 pred_v = transformer(
                     hidden_states=xt.to(dtype),
                     timestep=timesteps,

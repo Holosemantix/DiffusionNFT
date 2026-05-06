@@ -165,15 +165,26 @@ def flux2_sample(
 
     ctx, ctx_ids = encode_flux2_prompts(text_encoder, prompts, model_info, device)
     batch_size = len(prompts)
-    generator = torch.Generator(device=device)
-    if seed is not None:
-        generator.manual_seed(seed)
-    noise = torch.randn(
-        (batch_size, 128, height // 16, width // 16),
-        generator=generator,
-        dtype=torch.bfloat16,
-        device=device,
-    )
+    if device.type == "npu":
+        generator = torch.Generator(device="cpu")
+        if seed is not None:
+            generator.manual_seed(seed)
+        noise = torch.randn(
+            (batch_size, 128, height // 16, width // 16),
+            generator=generator,
+            dtype=torch.bfloat16,
+            device="cpu",
+        ).to(device)
+    else:
+        generator = torch.Generator(device=device)
+        if seed is not None:
+            generator.manual_seed(seed)
+        noise = torch.randn(
+            (batch_size, 128, height // 16, width // 16),
+            generator=generator,
+            dtype=torch.bfloat16,
+            device=device,
+        )
     x_tokens, x_ids = flux2_image_tokens(noise)
 
     ref_tokens = None

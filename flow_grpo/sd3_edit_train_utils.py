@@ -28,8 +28,11 @@ def setup_distributed() -> Tuple[int, int, int]:
     if world_size > 1 and not dist.is_initialized():
         os.environ["MASTER_ADDR"] = os.getenv("MASTER_ADDR", "localhost")
         os.environ["MASTER_PORT"] = os.getenv("MASTER_PORT", "12355")
-        dist.init_process_group("nccl", rank=rank, world_size=world_size)
-    if torch.cuda.is_available():
+        backend = "hccl" if hasattr(torch, "npu") and torch.npu.is_available() else "nccl"
+        dist.init_process_group(backend, rank=rank, world_size=world_size)
+    if hasattr(torch, "npu") and torch.npu.is_available():
+        torch.npu.set_device(local_rank)
+    elif torch.cuda.is_available():
         torch.cuda.set_device(local_rank)
     return rank, world_size, local_rank
 

@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from flow_grpo.device_utils import get_device, get_pin_memory
 from flow_grpo.editing_data import FaceEditDataset, collate_edit_samples
 from flow_grpo.flux2_train_utils import (
     FLUX2_KLEIN_4B,
@@ -50,7 +51,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = get_device()
     os.makedirs(args.output_dir, exist_ok=True)
 
     dataset = FaceEditDataset(
@@ -67,7 +68,7 @@ def main():
         shuffle=True,
         num_workers=args.num_workers,
         collate_fn=collate_edit_samples,
-        pin_memory=True,
+        pin_memory=get_pin_memory(device),
     )
 
     model, ae, text_encoder, model_info = load_flux2_components(args.model_name, device, debug_mode=args.debug_model)

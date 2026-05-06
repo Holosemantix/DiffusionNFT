@@ -8,6 +8,7 @@ import torch
 from PIL import Image
 from torchvision.transforms import ToTensor
 
+from flow_grpo.device_utils import get_device
 from flow_grpo.flux2_train_utils import (
     FLUX2_KLEIN_4B,
     add_flux2_lora,
@@ -34,7 +35,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = get_device()
     model, ae, text_encoder, model_info = load_flux2_components(args.model_name, device, debug_mode=args.debug_model)
     if args.lora_path:
         model, _ = add_flux2_lora(model, args.lora_path)

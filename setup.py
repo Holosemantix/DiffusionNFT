@@ -6,9 +6,9 @@ setup(
     packages=find_packages(),
     python_requires=">=3.10",
     install_requires=[
-        # Core ML (aligned with NPU pre-installed versions)
-        "torch>=2.1.0",
-        "torchvision>=0.16.0",
+        # Core ML (pinned to NPU pre-installed versions)
+        "torch==2.1.0",
+        "torchvision==0.16.0",
         "transformers>=4.40.0",
         "accelerate>=1.0.0",
         "diffusers>=0.30.0",
@@ -32,6 +32,9 @@ setup(
         "requests",
         "matplotlib>=3.7.0",
 
+        # Prevent protobuf from being upgraded to 4.x by sub-dependencies
+        "protobuf>=3.20.2,<4",
+
         # PEFT / HF
         "peft>=0.7.0",
 
@@ -51,6 +54,10 @@ setup(
         "ml_collections",
         "sentencepiece",
     ],
+        # NOTE for NPU users:
+        #   NPU environments ship most dependencies pre-installed.
+        #   Run `pip install -e . --no-deps` to avoid pip upgrading
+        #   torch/protobuf/etc. and breaking torch-npu / modelarts.
     extras_require={
         "dev": [
             "ipython>=8.18.0",

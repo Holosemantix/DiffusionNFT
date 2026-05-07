@@ -2,7 +2,6 @@ import os
 from typing import Optional, Sequence, Tuple
 
 import torch
-from peft import LoraConfig, PeftModel, get_peft_model
 
 
 FLUX2_KLEIN_4B = "flux.2-klein-4b"
@@ -97,6 +96,9 @@ def load_flux2_components(model_name: str, device: torch.device, debug_mode: boo
 
 
 def add_flux2_lora(model, lora_path: Optional[str] = None, adapter_name: str = "default"):
+    patch_torch_pytree_for_transformers()
+    from peft import LoraConfig, PeftModel, get_peft_model
+
     config = LoraConfig(
         r=32,
         lora_alpha=64,

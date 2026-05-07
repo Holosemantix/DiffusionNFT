@@ -30,7 +30,14 @@ def patch_torch_pytree_for_transformers() -> None:
         return
 
     if not hasattr(pytree, "register_pytree_node") and hasattr(pytree, "_register_pytree_node"):
-        pytree.register_pytree_node = pytree._register_pytree_node
+
+        def register_pytree_node(type_, flatten_fn, unflatten_fn, *args, **kwargs):
+            kwargs.pop("serialized_type_name", None)
+            kwargs.pop("to_dumpable_context", None)
+            kwargs.pop("from_dumpable_context", None)
+            return pytree._register_pytree_node(type_, flatten_fn, unflatten_fn, *args, **kwargs)
+
+        pytree.register_pytree_node = register_pytree_node
 
 
 def configure_flux2_local_paths(

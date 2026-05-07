@@ -9,12 +9,57 @@ FLUX2_KLEIN_4B = "flux.2-klein-4b"
 FLUX2_KLEIN_4B_HF = "black-forest-labs/FLUX.2-klein-4B"
 FLUX2_KLEIN_4B_BASE = "flux.2-klein-base-4b"
 
+FLUX2_LOCAL_MODEL_FILES = {
+    FLUX2_KLEIN_4B: ("KLEIN_4B_MODEL_PATH", "flux-2-klein-4b.safetensors"),
+    FLUX2_KLEIN_4B_BASE: ("KLEIN_4B_BASE_MODEL_PATH", "flux-2-klein-base-4b.safetensors"),
+}
+
 FLUX2_LORA_TARGET_MODULES = [
     "img_in",
     "txt_in",
     "linear1",
     "linear2",
 ]
+
+
+def configure_flux2_local_paths(
+    model_name: str,
+    local_dir: Optional[str] = None,
+    model_path: Optional[str] = None,
+    ae_path: Optional[str] = None,
+) -> None:
+    """Set official flux2 loader env vars for locally downloaded weights."""
+
+    model_name = model_name.lower()
+    if model_name not in FLUX2_LOCAL_MODEL_FILES:
+        if model_path:
+            os.environ["FLUX2_MODEL_PATH"] = os.path.abspath(model_path)
+        elif local_dir:
+            candidate = os.path.join(local_dir, "flux2-dev.safetensors")
+            if os.path.exists(candidate):
+                os.environ["FLUX2_MODEL_PATH"] = os.path.abspath(candidate)
+        if ae_path:
+            os.environ["AE_MODEL_PATH"] = os.path.abspath(ae_path)
+        elif local_dir:
+            candidate = os.path.join(local_dir, "ae.safetensors")
+            if os.path.exists(candidate):
+                os.environ["AE_MODEL_PATH"] = os.path.abspath(candidate)
+        return
+
+    model_env, default_model_file = FLUX2_LOCAL_MODEL_FILES[model_name]
+    if model_path is None and local_dir:
+        model_path = os.path.join(local_dir, default_model_file)
+    if ae_path is None and local_dir:
+        ae_path = os.path.join(local_dir, "ae.safetensors")
+
+    if model_path:
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Flux2 model file does not exist: {model_path}")
+        os.environ[model_env] = os.path.abspath(model_path)
+    if ae_path:
+        if not os.path.exists(ae_path):
+            raise FileNotFoundError(f"Flux2 autoencoder file does not exist: {ae_path}")
+        os.environ["AE_MODEL_PATH"] = os.path.abspath(ae_path)
 
 
 def load_flux2_components(model_name: str, device: torch.device, debug_mode: bool = False):

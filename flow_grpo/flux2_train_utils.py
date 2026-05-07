@@ -45,10 +45,20 @@ def configure_flux2_local_paths(
     local_dir: Optional[str] = None,
     model_path: Optional[str] = None,
     ae_path: Optional[str] = None,
+    text_encoder_path: Optional[str] = None,
 ) -> None:
     """Set official flux2 loader env vars for locally downloaded weights."""
 
     model_name = model_name.lower()
+    if text_encoder_path is None and local_dir:
+        candidate = os.path.join(local_dir, "text_encoder")
+        if os.path.isdir(candidate):
+            text_encoder_path = candidate
+    if text_encoder_path:
+        if not os.path.exists(text_encoder_path):
+            raise FileNotFoundError(f"Flux2 text encoder path does not exist: {text_encoder_path}")
+        os.environ["FLUX2_TEXT_ENCODER_PATH"] = os.path.abspath(text_encoder_path)
+
     if model_name not in FLUX2_LOCAL_MODEL_FILES:
         if model_path:
             os.environ["FLUX2_MODEL_PATH"] = os.path.abspath(model_path)
@@ -80,6 +90,16 @@ def configure_flux2_local_paths(
         os.environ["AE_MODEL_PATH"] = os.path.abspath(ae_path)
 
 
+def _load_flux2_text_encoder(model_name: str, device: torch.device, load_text_encoder):
+    text_encoder_path = os.environ.get("FLUX2_TEXT_ENCODER_PATH")
+    if not text_encoder_path:
+        return load_text_encoder(model_name, device=device)
+
+    from flux2.text_encoder import Qwen3Embedder
+
+    return Qwen3Embedder(model_spec=text_encoder_path, device=device)
+
+
 def load_flux2_components(model_name: str, device: torch.device, debug_mode: bool = False):
     patch_torch_pytree_for_transformers()
     try:
@@ -93,7 +113,7 @@ def load_flux2_components(model_name: str, device: torch.device, debug_mode: boo
 
     model_name = model_name.lower()
     model_info = FLUX2_MODEL_INFO[model_name]
-    text_encoder = load_text_encoder(model_name, device=device)
+    text_encoder = _load_flux2_text_encoder(model_name, device, load_text_encoder)
     model = load_flow_model(model_name, debug_mode=debug_mode, device=device)
     ae = load_ae(model_name, device=device)
     text_encoder.eval()

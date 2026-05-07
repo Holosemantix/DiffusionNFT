@@ -22,6 +22,18 @@ FLUX2_LORA_TARGET_MODULES = [
 ]
 
 
+def patch_torch_pytree_for_transformers() -> None:
+    """Bridge torch 2.1 private pytree API name expected by newer transformers."""
+
+    try:
+        import torch.utils._pytree as pytree
+    except Exception:
+        return
+
+    if not hasattr(pytree, "register_pytree_node") and hasattr(pytree, "_register_pytree_node"):
+        pytree.register_pytree_node = pytree._register_pytree_node
+
+
 def configure_flux2_local_paths(
     model_name: str,
     local_dir: Optional[str] = None,
@@ -63,6 +75,7 @@ def configure_flux2_local_paths(
 
 
 def load_flux2_components(model_name: str, device: torch.device, debug_mode: bool = False):
+    patch_torch_pytree_for_transformers()
     try:
         from flux2.util import FLUX2_MODEL_INFO, load_ae, load_flow_model, load_text_encoder
     except ImportError as exc:

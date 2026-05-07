@@ -9,19 +9,20 @@
 
 - [1. NPU 适配概览](#1-npu-适配概览)
 - [2. 环境准备](#2-环境准备)
-- [3. 数据集处理](#3-数据集处理)
-- [4. Flux2 NPU 训练路径](#4-flux2-npu-训练路径)
-  - [4.1 Stage 0：T2I SFT](#41-stage-0t2i-sft)
-  - [4.2 Stage 1：Edit SFT](#42-stage-1edit-sft)
-  - [4.3 Stage 2：Edit RL / DiffusionNFT](#43-stage-2edit-rldiffusionnft)
-  - [4.4 Flux2 采样验证](#44-flux2-采样验证)
-- [5. SD3 NPU 训练路径](#5-sd3-npu-训练路径)
-  - [5.1 SD3 Edit SFT（支持多卡 DDP）](#51-sd3-edit-sft支持多卡-ddp)
-  - [5.2 SD3 Edit RL](#52-sd3-edit-rl)
-- [6. 人脸奖励与损失](#6-人脸奖励与损失)
-- [7. LoRA 输出路径与恢复训练](#7-lora-输出路径与恢复训练)
-- [8. 主要代码地图](#8-主要代码地图)
-- [9. NPU 常见问题与排查](#9-npu-常见问题与排查)
+- [3. 推荐运行顺序](#3-推荐运行顺序)
+- [4. 数据集处理](#4-数据集处理)
+- [5. Flux2 NPU 训练路径](#5-flux2-npu-训练路径)
+  - [5.1 Stage 0：T2I SFT](#51-stage-0t2i-sft)
+  - [5.2 Stage 1：Edit SFT](#52-stage-1edit-sft)
+  - [5.3 Stage 2：Edit RL / DiffusionNFT](#53-stage-2edit-rldiffusionnft)
+  - [5.4 Flux2 采样验证](#54-flux2-采样验证)
+- [6. SD3 NPU 训练路径](#6-sd3-npu-训练路径)
+  - [6.1 SD3 Edit SFT（支持多卡 DDP）](#61-sd3-edit-sft支持多卡-ddp)
+  - [6.2 SD3 Edit RL](#62-sd3-edit-rl)
+- [7. 人脸奖励与损失](#7-人脸奖励与损失)
+- [8. LoRA 输出路径与恢复训练](#8-lora-输出路径与恢复训练)
+- [9. 主要代码地图](#9-主要代码地图)
+- [10. NPU 常见问题与排查](#10-npu-常见问题与排查)
 
 ---
 
@@ -91,7 +92,51 @@ huggingface-cli login
 
 ---
 
-## 3. 数据集处理
+## 3. 推荐运行顺序
+
+NPU 上推荐先准备环境和本地数据，再启动训练。不要直接在训练命令里动态加载
+`wider_face_restore`，这样可以避免训练进程反复触发 Hugging Face 远程数据集脚本和缓存逻辑。
+
+1. 登录 Hugging Face，确保模型和数据集可下载：
+
+```bash
+huggingface-cli login
+```
+
+2. 物化 WIDER FACE 编辑数据到本地 JSONL：
+
+```bash
+python scripts/prepare_face_edit_data.py \
+  --source wider_face_restore \
+  --split train \
+  --output_dir data/face_edit/wider_train \
+  --resolution 512 \
+  --max_samples 2000
+```
+
+3. 先跑小样本 Edit SFT 冒烟测试：
+
+```bash
+python scripts/train_face_edit_sft_flux2.py \
+  --dataset_source canonical_jsonl \
+  --jsonl_path data/face_edit/wider_train/train.jsonl \
+  --output_dir logs/face_edit/debug_sft_flux2_npu \
+  --resolution 512 \
+  --batch_size 1 \
+  --max_samples 16 \
+  --num_epochs 1 \
+  --save_steps 10
+```
+
+4. 冒烟通过后，按目标模型路径继续训练：
+
+- Flux2 推荐顺序：`T2I SFT -> Edit SFT -> Edit RL -> 采样验证`。
+- 只做编辑修复时，可以直接从 `Edit SFT` 开始；需要 RL 提升时，再用 `Edit SFT` 的 LoRA 启动 `Edit RL`。
+- SD3 推荐先跑 `SD3 Edit SFT`，再单进程跑 `SD3 Edit RL`。
+
+---
+
+## 4. 数据集处理
 
 与 GPU 版本完全一致。建议先物化数据，避免每次训练动态合成：
 
@@ -106,13 +151,19 @@ python scripts/prepare_face_edit_data.py \
 
 训练时通过 `--dataset_source canonical_jsonl --jsonl_path data/face_edit/wider_train/train.jsonl` 使用。
 
+如果直接训练时使用 `--dataset_source wider_face_restore` 并在 `load_dataset("CUHK-CSE/wider_face")`
+阶段报 `UnicodeDecodeError: 'utf-8' codec can't decode byte 0x8b`，通常是 Hugging Face
+数据集脚本/缓存里混入了 gzip 二进制文件。先清理 WIDER FACE 相关 HF 缓存，或换一个新的
+`--cache_dir` 重新下载；NPU 训练更推荐先运行上面的 `prepare_face_edit_data.py`，再用
+`canonical_jsonl` 读取本地物化数据，避免训练进程反复触发远程数据集加载逻辑。
+
 ---
 
-## 4. Flux2 NPU 训练路径
+## 5. Flux2 NPU 训练路径
 
 Flux2 默认模型名为 `flux.2-klein-4b`。NPU 上**建议单进程启动**；多卡并行目前无额外封装，和 GPU 版本保持一致。
 
-### 4.1 Stage 0：T2I SFT
+### 5.1 Stage 0：T2I SFT
 
 ```bash
 python scripts/train_face_t2i_sft_flux2.py \
@@ -124,7 +175,7 @@ python scripts/train_face_t2i_sft_flux2.py \
   --gradient_accumulation_steps 4
 ```
 
-### 4.2 Stage 1：Edit SFT
+### 5.2 Stage 1：Edit SFT
 
 ```bash
 python scripts/train_face_edit_sft_flux2.py \
@@ -151,7 +202,7 @@ python scripts/train_face_edit_sft_flux2.py \
   --gradient_accumulation_steps 4
 ```
 
-### 4.3 Stage 2：Edit RL / DiffusionNFT
+### 5.3 Stage 2：Edit RL / DiffusionNFT
 
 ```bash
 python scripts/train_face_edit_nft_flux2.py \
@@ -171,7 +222,7 @@ python scripts/train_face_edit_nft_flux2.py \
   --save_steps 200
 ```
 
-### 4.4 Flux2 采样验证
+### 5.4 Flux2 采样验证
 
 #### T2I 采样
 
@@ -198,11 +249,11 @@ python scripts/sample_flux2_t2i_edit.py \
 
 ---
 
-## 5. SD3 NPU 训练路径
+## 6. SD3 NPU 训练路径
 
 SD3 路径使用 `stabilityai/stable-diffusion-3.5-medium`。NPU 上 DDP backend 已自动切换为 `hccl`，可直接用 `torchrun` 启动多卡。
 
-### 5.1 SD3 Edit SFT（支持多卡 DDP）
+### 6.1 SD3 Edit SFT（支持多卡 DDP）
 
 单卡：
 
@@ -236,7 +287,7 @@ torchrun --nproc_per_node=8 scripts/train_face_edit_sft_sd3.py \
   --save_steps 500
 ```
 
-### 5.2 SD3 Edit RL
+### 6.2 SD3 Edit RL
 
 > **注意**：当前脚本显式要求单进程，`world_size > 1` 会直接报错。不要多卡启动。
 
@@ -258,7 +309,7 @@ python scripts/train_face_edit_nft_sd3.py \
 
 ---
 
-## 6. 人脸奖励与损失
+## 7. 人脸奖励与损失
 
 与 GPU 版本完全一致，详见原文档 `docs/face_edit_training.md` 第 6 节。  
 简要说明：
@@ -274,7 +325,7 @@ pip install facenet-pytorch mediapipe
 
 ---
 
-## 7. LoRA 输出路径与恢复训练
+## 8. LoRA 输出路径与恢复训练
 
 与 GPU 版本完全一致：
 
@@ -294,7 +345,7 @@ logs/face_edit/nft_sd3_npu/final/lora/
 
 ---
 
-## 8. 主要代码地图
+## 9. 主要代码地图
 
 ### 新增 NPU 兼容层
 
@@ -324,7 +375,7 @@ logs/face_edit/nft_sd3_npu/final/lora/
 
 ---
 
-## 9. NPU 常见问题与排查
+## 10. NPU 常见问题与排查
 
 | 问题 | 原因 | 解决 |
 |------|------|------|

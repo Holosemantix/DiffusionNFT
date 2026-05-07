@@ -1,4 +1,6 @@
+import hashlib
 import os
+import re
 import tempfile
 from typing import Optional, Sequence, Tuple
 
@@ -77,11 +79,11 @@ def configure_flux2_local_paths(
             if os.path.exists(candidate):
                 os.environ["FLUX2_MODEL_PATH"] = os.path.abspath(candidate)
         if ae_path:
-            os.environ["AE_MODEL_PATH"] = os.path.abspath(ae_path)
+            os.environ["AE_MODEL_PATH"] = _resolve_ae_env_path(ae_path)
         elif local_dir:
             candidate = os.path.join(local_dir, "ae.safetensors")
             if os.path.exists(candidate):
-                os.environ["AE_MODEL_PATH"] = os.path.abspath(candidate)
+                os.environ["AE_MODEL_PATH"] = _resolve_ae_env_path(candidate)
         return
 
     model_env, default_model_file = FLUX2_LOCAL_MODEL_FILES[model_name]
@@ -97,7 +99,135 @@ def configure_flux2_local_paths(
     if ae_path:
         if not os.path.exists(ae_path):
             raise FileNotFoundError(f"Flux2 autoencoder file does not exist: {ae_path}")
-        os.environ["AE_MODEL_PATH"] = os.path.abspath(ae_path)
+        os.environ["AE_MODEL_PATH"] = _resolve_ae_env_path(ae_path)
+
+
+_DIFFUSERS_AE_MARKERS = ("down_blocks", "up_blocks", "mid_block", "conv_norm_out")
+
+
+def _convert_diffusers_ae_state_dict(sd: dict) -> dict:
+    """Remap a diffusers-format AutoencoderKL state_dict to the native ldm/flux2 layout."""
+
+    out: dict = {}
+    # Decoder up_blocks index is reversed relative to native up.* (mid → up_blocks.0 ↔ up.3, last ↔ up.0).
+    NUM_UP = 4
+
+    def _attn_reshape(key: str, val: torch.Tensor) -> torch.Tensor:
+        # diffusers stores mid attention q/k/v/to_out.0 as nn.Linear (2D); ldm uses 1x1 Conv2d (4D).
+        if key.endswith(".weight") and val.ndim == 2:
+            return val.unsqueeze(-1).unsqueeze(-1).contiguous()
+        return val
+
+    for k, v in sd.items():
+        nk = k
+
+        # Top-level quant convs live under encoder/decoder in native layout.
+        if k.startswith("quant_conv."):
+            nk = "encoder.quant_conv." + k[len("quant_conv."):]
+            out[nk] = v
+            continue
+        if k.startswith("post_quant_conv."):
+            nk = "decoder.post_quant_conv." + k[len("post_quant_conv."):]
+            out[nk] = v
+            continue
+
+        # conv_norm_out → norm_out (encoder + decoder).
+        nk = nk.replace(".conv_norm_out.", ".norm_out.")
+
+        # Mid block resnets/attention.
+        nk = nk.replace(".mid_block.resnets.0.", ".mid.block_1.")
+        nk = nk.replace(".mid_block.resnets.1.", ".mid.block_2.")
+        if ".mid_block.attentions.0." in nk:
+            nk = nk.replace(".mid_block.attentions.0.group_norm.", ".mid.attn_1.norm.")
+            nk = nk.replace(".mid_block.attentions.0.to_q.", ".mid.attn_1.q.")
+            nk = nk.replace(".mid_block.attentions.0.to_k.", ".mid.attn_1.k.")
+            nk = nk.replace(".mid_block.attentions.0.to_v.", ".mid.attn_1.v.")
+            nk = nk.replace(".mid_block.attentions.0.to_out.0.", ".mid.attn_1.proj_out.")
+            v = _attn_reshape(nk, v)
+
+        # Encoder down_blocks.{i}.resnets.{j} → encoder.down.{i}.block.{j}
+        m = re.match(r"^encoder\.down_blocks\.(\d+)\.resnets\.(\d+)\.(.+)$", nk)
+        if m:
+            i, j, rest = m.group(1), m.group(2), m.group(3)
+            rest = rest.replace("conv_shortcut", "nin_shortcut")
+            nk = f"encoder.down.{i}.block.{j}.{rest}"
+        else:
+            m = re.match(r"^encoder\.down_blocks\.(\d+)\.downsamplers\.0\.(.+)$", nk)
+            if m:
+                nk = f"encoder.down.{m.group(1)}.downsample.{m.group(2)}"
+
+        # Decoder up_blocks.{i} → up.{NUM_UP-1-i}
+        m = re.match(r"^decoder\.up_blocks\.(\d+)\.resnets\.(\d+)\.(.+)$", nk)
+        if m:
+            i = int(m.group(1))
+            j, rest = m.group(2), m.group(3)
+            rest = rest.replace("conv_shortcut", "nin_shortcut")
+            nk = f"decoder.up.{NUM_UP - 1 - i}.block.{j}.{rest}"
+        else:
+            m = re.match(r"^decoder\.up_blocks\.(\d+)\.upsamplers\.0\.(.+)$", nk)
+            if m:
+                i = int(m.group(1))
+                nk = f"decoder.up.{NUM_UP - 1 - i}.upsample.{m.group(2)}"
+
+        out[nk] = v
+
+    return out
+
+
+def _looks_like_diffusers_ae(sd: dict) -> bool:
+    return any(any(marker in k for marker in _DIFFUSERS_AE_MARKERS) for k in sd.keys())
+
+
+def _maybe_convert_ae_checkpoint(ae_path: str) -> str:
+    """If `ae_path` is a diffusers-format AE checkpoint, convert and cache to temp file.
+
+    Returns the path that should be passed to flux2's load_ae (native ldm layout).
+    """
+
+    from safetensors import safe_open
+    from safetensors.torch import save_file
+
+    if not ae_path.endswith(".safetensors"):
+        return ae_path
+
+    # Peek at keys without loading full tensors.
+    with safe_open(ae_path, framework="pt") as f:
+        keys = list(f.keys())
+    if not any(any(marker in k for marker in _DIFFUSERS_AE_MARKERS) for k in keys):
+        return ae_path
+
+    # Cache converted file alongside source by content-hash so repeated runs are cheap.
+    try:
+        st = os.stat(ae_path)
+        sig = f"{ae_path}:{st.st_size}:{int(st.st_mtime)}"
+    except OSError:
+        sig = ae_path
+    digest = hashlib.sha1(sig.encode("utf-8")).hexdigest()[:12]
+    cache_dir = os.path.join(tempfile.gettempdir(), "flux2_ae_native")
+    os.makedirs(cache_dir, exist_ok=True)
+    cached = os.path.join(cache_dir, f"ae_native_{digest}.safetensors")
+    if os.path.exists(cached):
+        return cached
+
+    sd = {}
+    with safe_open(ae_path, framework="pt") as f:
+        for k in f.keys():
+            sd[k] = f.get_tensor(k)
+    converted = _convert_diffusers_ae_state_dict(sd)
+    tmp = cached + ".tmp"
+    save_file(converted, tmp)
+    os.replace(tmp, cached)
+    print(f"[flux2] converted diffusers AE checkpoint to native layout: {cached}")
+    return cached
+
+
+def _resolve_ae_env_path(ae_path: str) -> str:
+    abs_path = os.path.abspath(ae_path)
+    try:
+        return _maybe_convert_ae_checkpoint(abs_path)
+    except Exception as exc:  # pragma: no cover - best-effort fallback
+        print(f"[flux2] AE auto-conversion skipped ({type(exc).__name__}: {exc}); using {abs_path}")
+        return abs_path
 
 
 def _merge_text_encoder_and_tokenizer_dirs(text_encoder_path: str, tokenizer_path: Optional[str]) -> str:

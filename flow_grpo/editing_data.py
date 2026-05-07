@@ -3,6 +3,7 @@ import json
 import math
 import os
 import random
+import zipfile
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -107,6 +108,70 @@ def _retry_hf_dataset_after_decode_error(name: str, kwargs: Dict[str, Any], orig
                 f"Failed to load Hugging Face dataset {name!r} after refreshing the cache. Original error: "
                 f"{original_exc}"
             ) from exc
+
+
+def _local_wider_split_name(split: str) -> str:
+    return "val" if split in {"validation", "val", "dev"} else "train"
+
+
+def _find_zip_member(zip_file: zipfile.ZipFile, suffix: str) -> str:
+    matches = [name for name in zip_file.namelist() if name.endswith(suffix)]
+    if not matches:
+        raise FileNotFoundError(f"Could not find {suffix!r} in {zip_file.filename!r}")
+    return matches[0]
+
+
+def _parse_wider_face_annotations(text: str) -> List[Dict[str, Any]]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    records: List[Dict[str, Any]] = []
+    idx = 0
+    while idx < len(lines):
+        image_relpath = lines[idx]
+        idx += 1
+        if idx >= len(lines):
+            break
+        face_count = int(lines[idx])
+        idx += 1
+        boxes: List[Tuple[float, float, float, float]] = []
+        rows_to_read = max(face_count, 1)
+        for row_idx in range(rows_to_read):
+            if idx >= len(lines):
+                break
+            parts = lines[idx].split()
+            idx += 1
+            if row_idx < face_count and len(parts) >= 4:
+                x, y, w, h = [float(value) for value in parts[:4]]
+                if w > 1 and h > 1:
+                    boxes.append((x, y, w, h))
+        records.append({"image_relpath": image_relpath, "bboxes": boxes})
+    return records
+
+
+def _load_local_wider_face_records(root: str, split: str) -> List[Dict[str, Any]]:
+    wider_split = _local_wider_split_name(split)
+    root = os.path.abspath(root)
+    image_zip_path = os.path.join(root, f"WIDER_{wider_split}.zip")
+    annotation_zip_path = os.path.join(root, "wider_face_split.zip")
+    if not os.path.exists(image_zip_path):
+        raise FileNotFoundError(f"Missing WIDER image zip: {image_zip_path}")
+    if not os.path.exists(annotation_zip_path):
+        raise FileNotFoundError(f"Missing WIDER annotation zip: {annotation_zip_path}")
+
+    annotation_name = f"wider_face_split/wider_face_{wider_split}_bbx_gt.txt"
+    with zipfile.ZipFile(annotation_zip_path) as annotation_zip:
+        annotation_member = _find_zip_member(annotation_zip, annotation_name)
+        annotation_text = annotation_zip.read(annotation_member).decode("utf-8")
+
+    records = _parse_wider_face_annotations(annotation_text)
+    image_prefix = f"WIDER_{wider_split}/images/"
+    return [
+        {
+            "image_zip_path": image_zip_path,
+            "image_member": image_prefix + record["image_relpath"],
+            "bboxes": record["bboxes"],
+        }
+        for record in records
+    ]
 
 
 def _resize_triplet(
@@ -246,6 +311,7 @@ class FaceEditDataset(Dataset):
         resolution: int = 512,
         cache_dir: Optional[str] = None,
         jsonl_path: Optional[str] = None,
+        wider_face_root: Optional[str] = None,
         max_samples: Optional[int] = None,
         seed: int = 42,
         small_face_fraction: float = 0.12,
@@ -275,7 +341,10 @@ class FaceEditDataset(Dataset):
             self.records = _load_hf_dataset("osunlp/MagicBrush", split=hf_split, cache_dir=cache_dir)
         elif source == "wider_face_restore":
             hf_split = "validation" if split in {"validation", "val", "dev"} else split
-            self.records = _load_hf_dataset("CUHK-CSE/wider_face", split=hf_split, cache_dir=cache_dir)
+            if wider_face_root:
+                self.records = _load_local_wider_face_records(wider_face_root, hf_split)
+            else:
+                self.records = _load_hf_dataset("CUHK-CSE/wider_face", split=hf_split, cache_dir=cache_dir)
         else:
             raise ValueError(f"Unsupported edit dataset source: {source}")
 
@@ -300,7 +369,11 @@ class FaceEditDataset(Dataset):
         )
 
     def _from_wider_face(self, record: Dict[str, Any]) -> EditSample:
-        image = _pil_rgb(record.get("image") or record.get("img"))
+        if "image_zip_path" in record:
+            with zipfile.ZipFile(record["image_zip_path"]) as image_zip:
+                image = _pil_rgb(image_zip.read(record["image_member"]))
+        else:
+            image = _pil_rgb(record.get("image") or record.get("img"))
         boxes = _extract_boxes(record)
         boxes = _select_small_boxes(boxes, image.size, self.small_face_fraction, self.max_faces_per_image)
         if not boxes:

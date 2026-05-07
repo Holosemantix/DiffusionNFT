@@ -1,4 +1,5 @@
 import os
+import tempfile
 from typing import Optional, Sequence, Tuple
 
 import torch
@@ -46,6 +47,7 @@ def configure_flux2_local_paths(
     model_path: Optional[str] = None,
     ae_path: Optional[str] = None,
     text_encoder_path: Optional[str] = None,
+    tokenizer_path: Optional[str] = None,
 ) -> None:
     """Set official flux2 loader env vars for locally downloaded weights."""
 
@@ -54,10 +56,18 @@ def configure_flux2_local_paths(
         candidate = os.path.join(local_dir, "text_encoder")
         if os.path.isdir(candidate):
             text_encoder_path = candidate
+    if tokenizer_path is None and local_dir:
+        candidate = os.path.join(local_dir, "tokenizer")
+        if os.path.isdir(candidate):
+            tokenizer_path = candidate
     if text_encoder_path:
         if not os.path.exists(text_encoder_path):
             raise FileNotFoundError(f"Flux2 text encoder path does not exist: {text_encoder_path}")
         os.environ["FLUX2_TEXT_ENCODER_PATH"] = os.path.abspath(text_encoder_path)
+    if tokenizer_path:
+        if not os.path.exists(tokenizer_path):
+            raise FileNotFoundError(f"Flux2 tokenizer path does not exist: {tokenizer_path}")
+        os.environ["FLUX2_TOKENIZER_PATH"] = os.path.abspath(tokenizer_path)
 
     if model_name not in FLUX2_LOCAL_MODEL_FILES:
         if model_path:
@@ -90,6 +100,20 @@ def configure_flux2_local_paths(
         os.environ["AE_MODEL_PATH"] = os.path.abspath(ae_path)
 
 
+def _merge_text_encoder_and_tokenizer_dirs(text_encoder_path: str, tokenizer_path: Optional[str]) -> str:
+    if not tokenizer_path:
+        return text_encoder_path
+
+    merged_dir = tempfile.mkdtemp(prefix="flux2_text_encoder_")
+    for source_dir in (text_encoder_path, tokenizer_path):
+        for name in os.listdir(source_dir):
+            source = os.path.join(source_dir, name)
+            target = os.path.join(merged_dir, name)
+            if not os.path.exists(target):
+                os.symlink(source, target)
+    return merged_dir
+
+
 def _load_flux2_text_encoder(model_name: str, device: torch.device, load_text_encoder):
     text_encoder_path = os.environ.get("FLUX2_TEXT_ENCODER_PATH")
     if not text_encoder_path:
@@ -97,7 +121,8 @@ def _load_flux2_text_encoder(model_name: str, device: torch.device, load_text_en
 
     from flux2.text_encoder import Qwen3Embedder
 
-    return Qwen3Embedder(model_spec=text_encoder_path, device=device)
+    model_spec = _merge_text_encoder_and_tokenizer_dirs(text_encoder_path, os.environ.get("FLUX2_TOKENIZER_PATH"))
+    return Qwen3Embedder(model_spec=model_spec, device=device)
 
 
 def load_flux2_components(model_name: str, device: torch.device, debug_mode: bool = False):

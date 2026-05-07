@@ -103,11 +103,13 @@ NPU 上推荐先准备环境和本地数据，再启动训练。不要直接在�
 huggingface-cli login
 ```
 
-2. 物化 WIDER FACE 编辑数据到本地 JSONL：
+2. 物化 WIDER FACE 编辑数据到本地 JSONL。本地已有 zip 时推荐使用 `--wider_face_root`，
+   目录内需要包含 `WIDER_train.zip`、`WIDER_val.zip`、`wider_face_split.zip`：
 
 ```bash
 python scripts/prepare_face_edit_data.py \
   --source wider_face_restore \
+  --wider_face_root /home/ma-user/work/datasets/wider_face_zips \
   --split train \
   --output_dir data/face_edit/wider_train \
   --resolution 512 \
@@ -143,6 +145,7 @@ python scripts/train_face_edit_sft_flux2.py \
 ```bash
 python scripts/prepare_face_edit_data.py \
   --source wider_face_restore \
+  --wider_face_root /home/ma-user/work/datasets/wider_face_zips \
   --split train \
   --output_dir data/face_edit/wider_train \
   --resolution 512 \

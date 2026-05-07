@@ -120,6 +120,7 @@ python scripts/prepare_face_edit_data.py \
 
 ```bash
 python scripts/train_face_edit_sft_flux2.py \
+  --flux2_local_dir /home/ma-user/work/models/FLUX.2-klein-4B \
   --dataset_source canonical_jsonl \
   --jsonl_path data/face_edit/wider_train/train.jsonl \
   --output_dir logs/face_edit/debug_sft_flux2_npu \
@@ -182,6 +183,7 @@ python scripts/train_face_t2i_sft_flux2.py \
 
 ```bash
 python scripts/train_face_edit_sft_flux2.py \
+  --flux2_local_dir /home/ma-user/work/models/FLUX.2-klein-4B \
   --dataset_source canonical_jsonl \
   --jsonl_path data/face_edit/wider_train/train.jsonl \
   --output_dir logs/face_edit/sft_flux2_npu \
@@ -197,6 +199,7 @@ python scripts/train_face_edit_sft_flux2.py \
 
 ```bash
 python scripts/train_face_edit_sft_flux2.py \
+  --flux2_local_dir /home/ma-user/work/models/FLUX.2-klein-4B \
   --dataset_source canonical_jsonl \
   --jsonl_path data/face_edit/wider_train/train.jsonl \
   --resume_lora logs/face_t2i/sft_flux2_npu/final/lora \

@@ -11,7 +11,12 @@ import numpy as np
 import torch
 from PIL import Image, ImageFilter
 from torch.utils.data import Dataset
-from torchvision import transforms
+
+from flow_grpo.flux2_train_utils import patch_torch_pytree_for_transformers
+
+patch_torch_pytree_for_transformers()
+
+from torchvision import transforms  # noqa: E402
 
 
 CANONICAL_FIELDS = {

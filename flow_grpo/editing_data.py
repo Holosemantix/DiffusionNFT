@@ -4,7 +4,7 @@ import math
 import os
 import random
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -55,6 +55,58 @@ def _pil_mask(image: Any, size: Tuple[int, int]) -> Image.Image:
     if isinstance(image, str):
         return Image.open(image).convert("L").resize(size, Image.Resampling.NEAREST)
     raise TypeError(f"Unsupported mask value: {type(image)!r}")
+
+
+def _load_hf_dataset(name: str, split: str, cache_dir: Optional[str]):
+    """Load HF datasets that still use dataset scripts, with one cache repair retry."""
+
+    from datasets import load_dataset
+
+    kwargs = {
+        "split": split,
+        "cache_dir": cache_dir,
+        "trust_remote_code": True,
+    }
+    try:
+        return load_dataset(name, **kwargs)
+    except TypeError as exc:
+        if "trust_remote_code" not in str(exc):
+            raise
+        kwargs.pop("trust_remote_code")
+        try:
+            return load_dataset(name, **kwargs)
+        except UnicodeDecodeError as unicode_exc:
+            return _retry_hf_dataset_after_decode_error(name, kwargs, unicode_exc)
+    except UnicodeDecodeError as exc:
+        return _retry_hf_dataset_after_decode_error(name, kwargs, exc)
+
+
+def _retry_hf_dataset_after_decode_error(name: str, kwargs: Dict[str, Any], original_exc: UnicodeDecodeError):
+    from datasets import DownloadMode, load_dataset
+
+    retry_kwargs = dict(kwargs)
+    retry_kwargs["download_mode"] = DownloadMode.FORCE_REDOWNLOAD
+    try:
+        return load_dataset(name, **retry_kwargs)
+    except UnicodeDecodeError as exc:
+        cache_hint = retry_kwargs.get("cache_dir") or "~/.cache/huggingface/datasets"
+        raise RuntimeError(
+            f"Failed to load Hugging Face dataset {name!r}: the local dataset module/cache appears to contain "
+            "gzip or other binary data where the datasets loader expected UTF-8 text. Remove the dataset cache "
+            f"under {cache_hint!r}, or materialize once with scripts/prepare_face_edit_data.py and train with "
+            "--dataset_source canonical_jsonl --jsonl_path <prepared>/<split>.jsonl."
+        ) from exc
+    except TypeError as exc:
+        if "trust_remote_code" not in str(exc):
+            raise
+        retry_kwargs.pop("trust_remote_code", None)
+        try:
+            return load_dataset(name, **retry_kwargs)
+        except UnicodeDecodeError as exc:
+            raise RuntimeError(
+                f"Failed to load Hugging Face dataset {name!r} after refreshing the cache. Original error: "
+                f"{original_exc}"
+            ) from exc
 
 
 def _resize_triplet(
@@ -219,15 +271,11 @@ class FaceEditDataset(Dataset):
             with open(jsonl_path, "r", encoding="utf-8") as f:
                 self.records = [json.loads(line) for line in f if line.strip()]
         elif source == "magicbrush":
-            from datasets import load_dataset
-
             hf_split = "dev" if split in {"validation", "val"} else split
-            self.records = load_dataset("osunlp/MagicBrush", split=hf_split, cache_dir=cache_dir)
+            self.records = _load_hf_dataset("osunlp/MagicBrush", split=hf_split, cache_dir=cache_dir)
         elif source == "wider_face_restore":
-            from datasets import load_dataset
-
             hf_split = "validation" if split in {"validation", "val", "dev"} else split
-            self.records = load_dataset("CUHK-CSE/wider_face", split=hf_split, cache_dir=cache_dir)
+            self.records = _load_hf_dataset("CUHK-CSE/wider_face", split=hf_split, cache_dir=cache_dir)
         else:
             raise ValueError(f"Unsupported edit dataset source: {source}")
 

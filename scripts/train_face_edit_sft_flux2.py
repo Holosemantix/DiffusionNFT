@@ -42,6 +42,7 @@ def parse_args():
     parser.add_argument("--flux2_model_path", default=None, help="Local FLUX.2 transformer safetensors path")
     parser.add_argument("--flux2_ae_path", default=None, help="Local FLUX.2 autoencoder safetensors path")
     parser.add_argument("--flux2_text_encoder_path", default=None, help="Local FLUX.2 text encoder directory")
+    parser.add_argument("--flux2_tokenizer_path", default=None, help="Local FLUX.2 tokenizer directory")
     parser.add_argument("--dataset_source", default="wider_face_restore", choices=["wider_face_restore", "magicbrush", "canonical_jsonl"])
     parser.add_argument("--dataset_split", default="train")
     parser.add_argument("--jsonl_path", default=None)
@@ -70,6 +71,7 @@ def main():
         model_path=args.flux2_model_path,
         ae_path=args.flux2_ae_path,
         text_encoder_path=args.flux2_text_encoder_path,
+        tokenizer_path=args.flux2_tokenizer_path,
     )
     device = get_device()
     os.makedirs(args.output_dir, exist_ok=True)

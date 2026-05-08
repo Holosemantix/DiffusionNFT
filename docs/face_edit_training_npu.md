@@ -103,11 +103,13 @@ NPU 上推荐先准备环境和本地数据，再启动训练。不要直接在�
 huggingface-cli login
 ```
 
-2. 物化 WIDER FACE 编辑数据到本地 JSONL：
+2. 物化 WIDER FACE 编辑数据到本地 JSONL。本地已有 zip 时推荐使用 `--wider_face_root`，
+   目录内需要包含 `WIDER_train.zip`、`WIDER_val.zip`、`wider_face_split.zip`：
 
 ```bash
 python scripts/prepare_face_edit_data.py \
   --source wider_face_restore \
+  --wider_face_root /home/ma-user/work/datasets/wider_face_zips \
   --split train \
   --output_dir data/face_edit/wider_train \
   --resolution 512 \
@@ -118,6 +120,7 @@ python scripts/prepare_face_edit_data.py \
 
 ```bash
 python scripts/train_face_edit_sft_flux2.py \
+  --flux2_local_dir /home/ma-user/work/models/FLUX.2-klein-4B \
   --dataset_source canonical_jsonl \
   --jsonl_path data/face_edit/wider_train/train.jsonl \
   --output_dir logs/face_edit/debug_sft_flux2_npu \
@@ -143,6 +146,7 @@ python scripts/train_face_edit_sft_flux2.py \
 ```bash
 python scripts/prepare_face_edit_data.py \
   --source wider_face_restore \
+  --wider_face_root /home/ma-user/work/datasets/wider_face_zips \
   --split train \
   --output_dir data/face_edit/wider_train \
   --resolution 512 \
@@ -179,6 +183,7 @@ python scripts/train_face_t2i_sft_flux2.py \
 
 ```bash
 python scripts/train_face_edit_sft_flux2.py \
+  --flux2_local_dir /home/ma-user/work/models/FLUX.2-klein-4B \
   --dataset_source canonical_jsonl \
   --jsonl_path data/face_edit/wider_train/train.jsonl \
   --output_dir logs/face_edit/sft_flux2_npu \
@@ -194,6 +199,7 @@ python scripts/train_face_edit_sft_flux2.py \
 
 ```bash
 python scripts/train_face_edit_sft_flux2.py \
+  --flux2_local_dir /home/ma-user/work/models/FLUX.2-klein-4B \
   --dataset_source canonical_jsonl \
   --jsonl_path data/face_edit/wider_train/train.jsonl \
   --resume_lora logs/face_t2i/sft_flux2_npu/final/lora \

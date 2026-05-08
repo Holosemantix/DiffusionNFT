@@ -22,6 +22,7 @@ from flow_grpo.editing_data import FaceEditDataset, collate_edit_samples
 from flow_grpo.flux2_train_utils import (
     FLUX2_KLEIN_4B,
     add_flux2_lora,
+    configure_flux2_local_paths,
     encode_flux2_images,
     encode_flux2_prompts,
     flux2_checkpoint_dir,
@@ -37,6 +38,11 @@ from flow_grpo.flux2_train_utils import (
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", default=FLUX2_KLEIN_4B)
+    parser.add_argument("--flux2_local_dir", default=None, help="Directory containing local FLUX.2 safetensors files")
+    parser.add_argument("--flux2_model_path", default=None, help="Local FLUX.2 transformer safetensors path")
+    parser.add_argument("--flux2_ae_path", default=None, help="Local FLUX.2 autoencoder safetensors path")
+    parser.add_argument("--flux2_text_encoder_path", default=None, help="Local FLUX.2 text encoder directory")
+    parser.add_argument("--flux2_tokenizer_path", default=None, help="Local FLUX.2 tokenizer directory")
     parser.add_argument("--dataset_source", default="wider_face_restore", choices=["wider_face_restore", "magicbrush", "canonical_jsonl"])
     parser.add_argument("--dataset_split", default="train")
     parser.add_argument("--jsonl_path", default=None)
@@ -59,6 +65,14 @@ def parse_args():
 
 def main():
     args = parse_args()
+    configure_flux2_local_paths(
+        args.model_name,
+        local_dir=args.flux2_local_dir,
+        model_path=args.flux2_model_path,
+        ae_path=args.flux2_ae_path,
+        text_encoder_path=args.flux2_text_encoder_path,
+        tokenizer_path=args.flux2_tokenizer_path,
+    )
     device = get_device()
     os.makedirs(args.output_dir, exist_ok=True)
 

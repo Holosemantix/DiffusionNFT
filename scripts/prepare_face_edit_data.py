@@ -2,6 +2,7 @@
 
 Examples:
   python scripts/prepare_face_edit_data.py --source wider_face_restore --split train --output_dir data/face_edit/wider_train --max_samples 2000
+  python scripts/prepare_face_edit_data.py --source wider_face_restore --wider_face_root /path/to/wider_face_zips --split train --output_dir data/face_edit/wider_train --max_samples 2000
   python scripts/prepare_face_edit_data.py --source magicbrush --split train --output_dir data/face_edit/magicbrush_train --max_samples 2000
 """
 
@@ -20,6 +21,7 @@ def parse_args():
     parser.add_argument("--split", default="train")
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--cache_dir", default=None)
+    parser.add_argument("--wider_face_root", default=None, help="Directory containing WIDER_train.zip/WIDER_val.zip and wider_face_split.zip")
     parser.add_argument("--resolution", type=int, default=512)
     parser.add_argument("--max_samples", type=int, default=None)
     return parser.parse_args()
@@ -38,6 +40,7 @@ def main():
         split=args.split,
         resolution=args.resolution,
         cache_dir=args.cache_dir,
+        wider_face_root=args.wider_face_root,
         max_samples=args.max_samples,
     )
 
@@ -73,4 +76,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -252,6 +252,21 @@ def _load_flux2_text_encoder(model_name: str, device: torch.device, load_text_en
     from flux2.text_encoder import Qwen3Embedder
 
     model_spec = _merge_text_encoder_and_tokenizer_dirs(text_encoder_path, os.environ.get("FLUX2_TOKENIZER_PATH"))
+
+    # transformers 4.56+ meta-tensor load path triggers CUDA init when target
+    # device is non-CPU/non-CUDA (e.g. npu). Build the embedder on CPU first and
+    # move the underlying model to the requested device afterwards.
+    if device.type not in ("cpu", "cuda"):
+        embedder = Qwen3Embedder(model_spec=model_spec, device=torch.device("cpu"))
+        if hasattr(embedder, "model"):
+            embedder.model = embedder.model.to(device)
+        if hasattr(embedder, "device"):
+            try:
+                embedder.device = device
+            except AttributeError:
+                pass
+        return embedder
+
     return Qwen3Embedder(model_spec=model_spec, device=device)
 
 

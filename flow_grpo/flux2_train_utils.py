@@ -343,6 +343,16 @@ def decode_flux2_latents(ae, latents: torch.Tensor) -> torch.Tensor:
 def flux2_image_tokens(latents: torch.Tensor, t_coord: Optional[torch.Tensor] = None):
     from flux2.sampling import batched_prc_img
 
+    # flux2.sampling.prc_img builds coord tensors with mixed devices (input tensor's
+    # device for some, CPU default for others). On CUDA torch.cartesian_prod silently
+    # promotes; on NPU it errors with "meshgrid expects all tensors to have the same
+    # device". Run prc on CPU and move the (small) outputs back to the input device.
+    src_device = latents.device
+    if src_device.type not in ("cpu", "cuda"):
+        latents_cpu = latents.detach().to("cpu")
+        t_coord_cpu = t_coord.detach().to("cpu") if t_coord is not None else None
+        tokens, ids = batched_prc_img(latents_cpu, t_coord=t_coord_cpu)
+        return tokens.to(src_device), ids.to(src_device)
     tokens, ids = batched_prc_img(latents, t_coord=t_coord)
     return tokens, ids
 

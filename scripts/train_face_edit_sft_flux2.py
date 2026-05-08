@@ -74,6 +74,9 @@ def parse_args():
                         help="Number of denoising steps used when generating viz samples.")
     parser.add_argument("--viz_batch_size", type=int, default=2,
                         help="Number of samples included in each viz grid (capped by training batch size).")
+    parser.add_argument("--viz_seed", type=int, default=-1,
+                        help="Seed for viz noise. -1 (default) uses global_step so each viz call sees "
+                             "different noise; any non-negative integer fixes the seed for trajectory comparison.")
     return parser.parse_args()
 
 
@@ -177,7 +180,8 @@ def main():
                         instructions=viz_batch["instructions"],
                         height=args.resolution, width=args.resolution,
                         num_steps=args.viz_steps, guidance=args.guidance,
-                        device=device, seed=0,
+                        device=device,
+                        seed=global_step if args.viz_seed < 0 else args.viz_seed,
                     )
                     iterator.write(f"[viz] saved {viz_path}")
                 except Exception as exc:

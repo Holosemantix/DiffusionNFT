@@ -292,6 +292,68 @@ def load_flux2_components(model_name: str, device: torch.device, debug_mode: boo
     return model, ae, text_encoder, model_info
 
 
+def enable_flux2_gradient_checkpointing(model) -> int:
+    """Wrap each transformer block's forward methods with torch.utils.checkpoint.
+
+    flux2's training path calls block.forward_kv_extract(...) directly (not
+    block(...)), so the standard HF gradient_checkpointing_enable hook misses
+    it. We monkey-patch both `forward` and `forward_kv_extract` (when present)
+    on each block found under common attribute names.
+
+    Returns the number of blocks patched (for logging).
+    """
+
+    from torch.utils.checkpoint import checkpoint as _checkpoint
+
+    base = model.get_base_model() if hasattr(model, "get_base_model") else model
+
+    # PEFT requires inputs to require grad for checkpointing to backprop through LoRA.
+    if hasattr(base, "enable_input_require_grads"):
+        try:
+            base.enable_input_require_grads()
+        except Exception:
+            pass
+    elif hasattr(model, "enable_input_require_grads"):
+        try:
+            model.enable_input_require_grads()
+        except Exception:
+            pass
+
+    block_lists = []
+    for attr in ("blocks", "transformer_blocks", "single_blocks", "double_blocks", "layers"):
+        child = getattr(base, attr, None)
+        if isinstance(child, torch.nn.ModuleList) and len(child) > 0:
+            block_lists.append(child)
+
+    def _make_wrapper(orig_method):
+        def wrapped(*args, **kwargs):
+            if not torch.is_grad_enabled():
+                return orig_method(*args, **kwargs)
+
+            def closure(*pos):
+                return orig_method(*pos, **kwargs)
+
+            return _checkpoint(closure, *args, use_reentrant=False)
+
+        return wrapped
+
+    patched = 0
+    for blocks in block_lists:
+        for block in blocks:
+            for method_name in ("forward_kv_extract", "forward"):
+                if hasattr(block, method_name):
+                    orig = getattr(block, method_name)
+                    setattr(block, method_name, _make_wrapper(orig))
+            patched += 1
+
+    if patched == 0:
+        raise RuntimeError(
+            "enable_flux2_gradient_checkpointing: could not find a transformer block ModuleList "
+            f"on {type(base).__name__}. Inspect the model and add the attr name to block_lists."
+        )
+    return patched
+
+
 def add_flux2_lora(model, lora_path: Optional[str] = None, adapter_name: str = "default"):
     patch_torch_pytree_for_transformers()
     from peft import LoraConfig, PeftModel, get_peft_model

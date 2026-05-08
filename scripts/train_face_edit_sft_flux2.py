@@ -23,6 +23,7 @@ from flow_grpo.flux2_train_utils import (
     FLUX2_KLEIN_4B,
     add_flux2_lora,
     configure_flux2_local_paths,
+    enable_flux2_gradient_checkpointing,
     encode_flux2_images,
     encode_flux2_prompts,
     flux2_checkpoint_dir,
@@ -60,6 +61,12 @@ def parse_args():
     parser.add_argument("--save_steps", type=int, default=500)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--debug_model", action="store_true")
+    parser.add_argument(
+        "--gradient_checkpointing",
+        action="store_true",
+        help="Wrap flux2 transformer block forwards with torch.utils.checkpoint to "
+             "trade compute for activation memory. Strongly recommended at 1024 res.",
+    )
     return parser.parse_args()
 
 
@@ -95,6 +102,9 @@ def main():
 
     model, ae, text_encoder, model_info = load_flux2_components(args.model_name, device, debug_mode=args.debug_model)
     model, _ = add_flux2_lora(model, args.resume_lora)
+    if args.gradient_checkpointing:
+        n_patched = enable_flux2_gradient_checkpointing(model)
+        print(f"[flux2] gradient checkpointing enabled on {n_patched} transformer blocks")
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(trainable_params, lr=args.learning_rate, weight_decay=1e-4)
 

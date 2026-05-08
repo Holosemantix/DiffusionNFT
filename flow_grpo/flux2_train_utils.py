@@ -323,7 +323,15 @@ def encode_flux2_prompts(text_encoder, prompts: Sequence[str], model_info: dict,
 @torch.no_grad()
 def encode_flux2_images(ae, images: torch.Tensor) -> torch.Tensor:
     images = images.to(device=next(ae.parameters()).device, dtype=torch.bfloat16) * 2.0 - 1.0
-    return ae.encode(images)[0]
+    latents = ae.encode(images)
+    # flux2's native AutoEncoder.encode returns the latent tensor directly (B, C, H, W);
+    # diffusers' AutoencoderKL returns an output object whose [0] is latent_dist. Support
+    # both: only unwrap when the returned object isn't already a tensor.
+    if not isinstance(latents, torch.Tensor):
+        latents = latents[0]
+        if hasattr(latents, "sample"):
+            latents = latents.sample()
+    return latents
 
 
 @torch.no_grad()

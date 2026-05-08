@@ -4,7 +4,7 @@ setup(
     name="diffusion-nft",
     version="0.0.1",
     packages=find_packages(),
-    python_requires=">=3.10",
+    python_requires=">=3.9",
     install_requires=[
         # Core ML (pinned to NPU pre-installed versions)
         "torch==2.1.0",

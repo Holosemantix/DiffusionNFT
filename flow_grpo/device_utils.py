@@ -3,6 +3,13 @@ from typing import Optional
 
 import torch
 
+# Importing torch_npu registers the NPU backend so torch.npu.is_available() returns
+# True on Ascend hosts. Must happen before any device probing. No-op elsewhere.
+try:
+    import torch_npu  # noqa: F401
+except ImportError:
+    pass
+
 
 def get_device(local_rank: int = 0) -> torch.device:
     """Auto-select NPU > CUDA > CPU."""

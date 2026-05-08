@@ -33,6 +33,7 @@ from flow_grpo.flux2_train_utils import (
     load_flux2_components,
     make_flux2_noisy_tokens,
     sample_flux2_timestep,
+    save_flux2_viz_grid,
 )
 
 
@@ -67,6 +68,12 @@ def parse_args():
         help="Wrap flux2 transformer block forwards with torch.utils.checkpoint to "
              "trade compute for activation memory. Strongly recommended at 1024 res.",
     )
+    parser.add_argument("--viz_every", type=int, default=0,
+                        help="Save a [source|pred|target] grid PNG every N optimizer steps. 0 disables.")
+    parser.add_argument("--viz_steps", type=int, default=8,
+                        help="Number of denoising steps used when generating viz samples.")
+    parser.add_argument("--viz_batch_size", type=int, default=2,
+                        help="Number of samples included in each viz grid (capped by training batch size).")
     return parser.parse_args()
 
 
@@ -110,6 +117,10 @@ def main():
 
     global_step = 0
     optimizer.zero_grad()
+
+    viz_batch = None  # cached fixed batch for periodic visualization
+    viz_dir = os.path.join(args.output_dir, "viz")
+
     for epoch in range(args.num_epochs):
         iterator = tqdm(dataloader, desc=f"Flux2 edit SFT epoch {epoch}")
         for batch in iterator:
@@ -147,6 +158,31 @@ def main():
 
             iterator.set_postfix({"loss": float(edit_loss.detach())})
             global_step += 1
+
+            if args.viz_every > 0 and viz_batch is None:
+                k = max(1, min(args.viz_batch_size, source.shape[0]))
+                viz_batch = {
+                    "source": source[:k].detach().clone(),
+                    "target": target[:k].detach().clone(),
+                    "instructions": list(prompts[:k]),
+                }
+
+            if args.viz_every > 0 and global_step % args.viz_every == 0 and viz_batch is not None:
+                viz_path = os.path.join(viz_dir, f"step_{global_step:06d}.png")
+                try:
+                    save_flux2_viz_grid(
+                        viz_path, model, ae, text_encoder, model_info,
+                        source_images=viz_batch["source"],
+                        target_images=viz_batch["target"],
+                        instructions=viz_batch["instructions"],
+                        height=args.resolution, width=args.resolution,
+                        num_steps=args.viz_steps, guidance=args.guidance,
+                        device=device, seed=0,
+                    )
+                    iterator.write(f"[viz] saved {viz_path}")
+                except Exception as exc:
+                    iterator.write(f"[viz] skipped at step {global_step}: {type(exc).__name__}: {exc}")
+
             if args.save_steps > 0 and global_step % args.save_steps == 0:
                 model.save_pretrained(flux2_checkpoint_dir(args.output_dir, f"checkpoint-{global_step}"))
 

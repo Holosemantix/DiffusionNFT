@@ -483,6 +483,70 @@ def flux2_checkpoint_dir(output_dir: str, step_name: str) -> str:
     return path
 
 
+def _to_pil_strip(images: torch.Tensor):
+    """Convert a (B, 3, H, W) float[0,1] tensor into a list of HWC uint8 numpy arrays."""
+
+    import numpy as np
+
+    arr = (images.detach().clamp(0, 1).float().cpu().numpy() * 255.0 + 0.5).astype(np.uint8)
+    return [a.transpose(1, 2, 0) for a in arr]
+
+
+@torch.no_grad()
+def save_flux2_viz_grid(
+    output_path: str,
+    model,
+    ae,
+    text_encoder,
+    model_info: dict,
+    *,
+    source_images: torch.Tensor,
+    target_images: torch.Tensor,
+    instructions: Sequence[str],
+    height: int,
+    width: int,
+    num_steps: int,
+    guidance: float,
+    device: torch.device,
+    seed: int = 0,
+):
+    """Run a short denoising sample and save [source | predicted | target] grid PNG."""
+
+    from PIL import Image
+    import numpy as np
+
+    was_training = model.training
+    model.eval()
+    try:
+        pred_images, _ = flux2_sample(
+            model,
+            ae,
+            text_encoder,
+            model_info,
+            list(instructions),
+            height=height,
+            width=width,
+            num_steps=num_steps,
+            guidance=guidance,
+            device=device,
+            source_images=source_images,
+            seed=seed,
+        )
+    finally:
+        if was_training:
+            model.train()
+
+    src = _to_pil_strip(source_images)
+    pred = _to_pil_strip(pred_images)
+    tgt = _to_pil_strip(target_images)
+    n = min(len(src), len(pred), len(tgt))
+    rows = [np.concatenate([src[i], pred[i], tgt[i]], axis=1) for i in range(n)]
+    grid = np.concatenate(rows, axis=0)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    Image.fromarray(grid).save(output_path)
+    return output_path
+
+
 @torch.no_grad()
 def flux2_sample(
     model,

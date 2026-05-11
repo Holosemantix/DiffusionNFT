@@ -1,5 +1,6 @@
 import io
 import json
+import hashlib
 import math
 import os
 import random
@@ -203,18 +204,73 @@ def _load_local_wider_face_records(root: str, split: str) -> List[Dict[str, Any]
     ]
 
 
-def _load_image_dir_records(root: str) -> List[Dict[str, Any]]:
+def _archive_extract_subdir(zip_path: str) -> str:
+    stem = os.path.splitext(os.path.basename(zip_path))[0]
+    safe_stem = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in stem).strip("_") or "archive"
+    digest = hashlib.sha1(os.path.abspath(zip_path).encode("utf-8")).hexdigest()[:10]
+    return f"{safe_stem}_{digest}"
+
+
+def _is_relative_safe_zip_member(name: str) -> bool:
+    normalized = os.path.normpath(name)
+    if normalized in {"", "."}:
+        return False
+    return not (os.path.isabs(normalized) or normalized.startswith("..") or f"{os.sep}.." in normalized)
+
+
+def _extract_zip_lossless(zip_path: str, extract_root: str) -> str:
+    archive_dir = os.path.join(extract_root, _archive_extract_subdir(zip_path))
+    os.makedirs(archive_dir, exist_ok=True)
+    with zipfile.ZipFile(zip_path) as zf:
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            if not _is_relative_safe_zip_member(info.filename):
+                raise RuntimeError(f"Unsafe zip member path {info.filename!r} in {zip_path!r}")
+            target = os.path.join(archive_dir, os.path.normpath(info.filename))
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            if os.path.exists(target) and os.path.getsize(target) == info.file_size:
+                continue
+            with zf.open(info, "r") as src, open(target, "wb") as dst:
+                while True:
+                    chunk = src.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    dst.write(chunk)
+    return archive_dir
+
+
+def _find_image_dir_zips(root: str, exclude_dir: Optional[str]) -> List[str]:
+    zips = sorted(
+        set(glob(os.path.join(root, "**", "*.zip"), recursive=True))
+        | set(glob(os.path.join(root, "**", "*.ZIP"), recursive=True))
+    )
+    if exclude_dir is None:
+        return zips
+    exclude_dir = os.path.abspath(exclude_dir)
+    return [path for path in zips if not os.path.abspath(path).startswith(exclude_dir + os.sep)]
+
+
+def _load_image_dir_records(root: str, zip_extract_dir: Optional[str] = None) -> List[Dict[str, Any]]:
     root = os.path.abspath(root)
     if not os.path.isdir(root):
         raise FileNotFoundError(f"face_aug_preserve image_dir does not exist or is not a directory: {root}")
 
+    extract_root = os.path.abspath(zip_extract_dir) if zip_extract_dir else os.path.join(root, "_unzipped")
+    zip_paths = _find_image_dir_zips(root, extract_root)
+    scan_roots = [root]
+    if zip_paths:
+        os.makedirs(extract_root, exist_ok=True)
+        scan_roots.extend(_extract_zip_lossless(path, extract_root) for path in zip_paths)
+
     paths: List[str] = []
-    for ext in IMAGE_EXTENSIONS:
-        paths.extend(glob(os.path.join(root, "**", f"*{ext}"), recursive=True))
-        paths.extend(glob(os.path.join(root, "**", f"*{ext.upper()}"), recursive=True))
+    for scan_root in scan_roots:
+        for ext in IMAGE_EXTENSIONS:
+            paths.extend(glob(os.path.join(scan_root, "**", f"*{ext}"), recursive=True))
+            paths.extend(glob(os.path.join(scan_root, "**", f"*{ext.upper()}"), recursive=True))
     paths = sorted(set(paths))
     if not paths:
-        raise FileNotFoundError(f"No images with extensions {IMAGE_EXTENSIONS!r} found under {root}")
+        raise FileNotFoundError(f"No images with extensions {IMAGE_EXTENSIONS!r} found under {root} or extracted zips")
     return [{"image_path": path} for path in paths]
 
 
@@ -434,6 +490,7 @@ class FaceEditDataset(Dataset):
         cache_dir: Optional[str] = None,
         jsonl_path: Optional[str] = None,
         image_dir: Optional[str] = None,
+        zip_extract_dir: Optional[str] = None,
         wider_face_root: Optional[str] = None,
         max_samples: Optional[int] = None,
         seed: int = 42,
@@ -477,7 +534,7 @@ class FaceEditDataset(Dataset):
         elif source == "face_aug_preserve":
             if not image_dir:
                 raise ValueError("image_dir is required for face_aug_preserve")
-            self.records = self._detect_face_image_records(_load_image_dir_records(image_dir))
+            self.records = self._detect_face_image_records(_load_image_dir_records(image_dir, zip_extract_dir))
         else:
             raise ValueError(f"Unsupported edit dataset source: {source}")
 

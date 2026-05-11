@@ -4,7 +4,7 @@ Examples:
   python scripts/prepare_face_edit_data.py --source wider_face_restore --split train --output_dir data/face_edit/wider_train --max_samples 2000
   python scripts/prepare_face_edit_data.py --source wider_face_restore --wider_face_root /path/to/wider_face_zips --split train --output_dir data/face_edit/wider_train --max_samples 2000
   python scripts/prepare_face_edit_data.py --source magicbrush --split train --output_dir data/face_edit/magicbrush_train --max_samples 2000
-  python scripts/prepare_face_edit_data.py --source face_aug_preserve --image_dir /path/to/face_images --output_dir data/face_edit/face_aug_train
+  python scripts/prepare_face_edit_data.py --source face_aug_preserve --image_dir /path/to/face_images_or_zips --output_dir data/face_edit/face_aug_train
 """
 
 import argparse
@@ -24,6 +24,11 @@ def parse_args():
     parser.add_argument("--cache_dir", default=None)
     parser.add_argument("--wider_face_root", default=None, help="Directory containing WIDER_train.zip/WIDER_val.zip and wider_face_split.zip")
     parser.add_argument("--image_dir", default=None, help="Directory of ordinary face images for face_aug_preserve.")
+    parser.add_argument(
+        "--zip_extract_dir",
+        default=None,
+        help="Optional directory for losslessly extracted zip archives under --image_dir. Defaults to <image_dir>/_unzipped.",
+    )
     parser.add_argument("--resolution", type=int, default=512)
     parser.add_argument("--max_samples", type=int, default=None)
     parser.add_argument(
@@ -53,6 +58,7 @@ def main():
         cache_dir=args.cache_dir,
         wider_face_root=args.wider_face_root,
         image_dir=args.image_dir,
+        zip_extract_dir=args.zip_extract_dir,
         max_samples=args.max_samples,
         synthetic_edit_mix=args.synthetic_edit_mix,
         face_detector_min_size=args.face_detector_min_size,

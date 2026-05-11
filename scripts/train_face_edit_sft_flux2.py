@@ -53,6 +53,11 @@ def parse_args():
     parser.add_argument("--dataset_split", default="train")
     parser.add_argument("--jsonl_path", default=None)
     parser.add_argument("--image_dir", default=None, help="Directory of ordinary face images for face_aug_preserve.")
+    parser.add_argument(
+        "--zip_extract_dir",
+        default=None,
+        help="Optional directory for losslessly extracted zip archives under --image_dir. Defaults to <image_dir>/_unzipped.",
+    )
     parser.add_argument("--cache_dir", default=None)
     parser.add_argument("--output_dir", default="logs/face_edit/sft_flux2")
     parser.add_argument("--resume_lora", default=None)
@@ -114,6 +119,7 @@ def main():
         cache_dir=args.cache_dir,
         jsonl_path=args.jsonl_path,
         image_dir=args.image_dir,
+        zip_extract_dir=args.zip_extract_dir,
         max_samples=args.max_samples,
         synthetic_edit_mix=args.synthetic_edit_mix,
         face_detector_min_size=args.face_detector_min_size,

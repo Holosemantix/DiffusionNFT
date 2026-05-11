@@ -133,7 +133,7 @@ huggingface-cli login
 
 ### 3.3 本地人脸图像的保 ID 合成编辑
 
-当只有一批包含人脸的普通图片、没有真实编辑前后对时，可使用 `face_aug_preserve`。它会先检测人脸框并过滤无脸图，再按 `--synthetic_edit_mix` 采样三类任务：
+当只有一批包含人脸的普通图片、没有真实编辑前后对时，可使用 `face_aug_preserve`。它会先检测人脸框并过滤无脸图，再按 `--synthetic_edit_mix` 采样三类任务。若 `--image_dir` 下包含一个或多个 `.zip`，脚本会先把每个 zip 无损解压到 `--zip_extract_dir`；未指定时默认使用 `<image_dir>/_unzipped`，然后再扫描原目录和解压目录中的图片。
 
 | 任务 | 默认占比 | source / target 构造 | 训练意图 |
 |------|----------|----------------------|----------|
@@ -146,7 +146,8 @@ huggingface-cli login
 ```bash
 python scripts/prepare_face_edit_data.py \
   --source face_aug_preserve \
-  --image_dir /path/to/face_images \
+  --image_dir /path/to/face_images_or_zips \
+  --zip_extract_dir /path/to/extracted_face_images \
   --output_dir data/face_edit/face_aug_train \
   --resolution 512 \
   --synthetic_edit_mix restore:0.4,background:0.4,noop:0.2 \
@@ -158,7 +159,8 @@ python scripts/prepare_face_edit_data.py \
 ```bash
 python scripts/train_face_edit_sft_flux2.py \
   --dataset_source face_aug_preserve \
-  --image_dir /path/to/face_images \
+  --image_dir /path/to/face_images_or_zips \
+  --zip_extract_dir /path/to/extracted_face_images \
   --synthetic_edit_mix restore:0.4,background:0.4,noop:0.2 \
   --face_prompt_tag "[preserve face id]"
 ```

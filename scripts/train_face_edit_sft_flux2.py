@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: E402
 """Flux2 klein 4B edit SFT for small low-resolution face restoration.
 
 The important Flux2 edit contract is:
@@ -11,6 +12,12 @@ Only the current noisy target tokens are supervised.
 
 import argparse
 import os
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 import torch
 import torch.nn.functional as F

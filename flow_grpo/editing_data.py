@@ -13,6 +13,7 @@ import numpy as np
 import torch
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 from torch.utils.data import Dataset
+from tqdm import tqdm
 
 from flow_grpo.face_edit_losses import detect_faces_opencv
 from flow_grpo.flux2_train_utils import patch_torch_pytree_for_transformers
@@ -211,6 +212,38 @@ def _archive_extract_subdir(zip_path: str) -> str:
     return f"{safe_stem}_{digest}"
 
 
+def _zip_manifest_path(archive_dir: str) -> str:
+    return os.path.join(archive_dir, ".extract_complete.json")
+
+
+def _zip_signature(zip_path: str) -> Dict[str, Any]:
+    stat = os.stat(zip_path)
+    return {
+        "zip_path": os.path.abspath(zip_path),
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+    }
+
+
+def _zip_manifest_matches(zip_path: str, archive_dir: str) -> bool:
+    manifest_path = _zip_manifest_path(archive_dir)
+    if not os.path.exists(manifest_path):
+        return False
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except Exception:
+        return False
+    return manifest.get("zip") == _zip_signature(zip_path)
+
+
+def _write_zip_manifest(zip_path: str, archive_dir: str, extracted_files: int) -> None:
+    tmp_path = _zip_manifest_path(archive_dir) + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump({"zip": _zip_signature(zip_path), "extracted_files": extracted_files}, f, indent=2)
+    os.replace(tmp_path, _zip_manifest_path(archive_dir))
+
+
 def _is_relative_safe_zip_member(name: str) -> bool:
     normalized = os.path.normpath(name)
     if normalized in {"", "."}:
@@ -221,8 +254,15 @@ def _is_relative_safe_zip_member(name: str) -> bool:
 def _extract_zip_lossless(zip_path: str, extract_root: str) -> str:
     archive_dir = os.path.join(extract_root, _archive_extract_subdir(zip_path))
     os.makedirs(archive_dir, exist_ok=True)
+    if _zip_manifest_matches(zip_path, archive_dir):
+        print(f"[face_aug_preserve] zip already extracted, skipping: {zip_path} -> {archive_dir}")
+        return archive_dir
+
     with zipfile.ZipFile(zip_path) as zf:
-        for info in zf.infolist():
+        members = [info for info in zf.infolist() if not info.is_dir()]
+        extracted_files = 0
+        iterator = tqdm(members, desc=f"extract {os.path.basename(zip_path)}", unit="file")
+        for info in iterator:
             if info.is_dir():
                 continue
             if not _is_relative_safe_zip_member(info.filename):
@@ -237,6 +277,8 @@ def _extract_zip_lossless(zip_path: str, extract_root: str) -> str:
                     if not chunk:
                         break
                     dst.write(chunk)
+            extracted_files += 1
+        _write_zip_manifest(zip_path, archive_dir, extracted_files)
     return archive_dir
 
 
@@ -261,9 +303,13 @@ def _load_image_dir_records(root: str, zip_extract_dir: Optional[str] = None) ->
     scan_roots = [root]
     if zip_paths:
         os.makedirs(extract_root, exist_ok=True)
-        scan_roots.extend(_extract_zip_lossless(path, extract_root) for path in zip_paths)
+        print(f"[face_aug_preserve] found {len(zip_paths)} zip archive(s); extract_root={extract_root}")
+        extracted_roots = [_extract_zip_lossless(path, extract_root) for path in zip_paths]
+        if not extract_root.startswith(root + os.sep):
+            scan_roots.extend(extracted_roots)
 
     paths: List[str] = []
+    print(f"[face_aug_preserve] scanning image files from {len(scan_roots)} directorie(s)")
     for scan_root in scan_roots:
         for ext in IMAGE_EXTENSIONS:
             paths.extend(glob(os.path.join(scan_root, "**", f"*{ext}"), recursive=True))
@@ -271,6 +317,7 @@ def _load_image_dir_records(root: str, zip_extract_dir: Optional[str] = None) ->
     paths = sorted(set(paths))
     if not paths:
         raise FileNotFoundError(f"No images with extensions {IMAGE_EXTENSIONS!r} found under {root} or extracted zips")
+    print(f"[face_aug_preserve] found {len(paths)} candidate image file(s)")
     return [{"image_path": path} for path in paths]
 
 
@@ -546,17 +593,26 @@ class FaceEditDataset(Dataset):
 
     def _detect_face_image_records(self, records: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
         filtered: List[Dict[str, Any]] = []
-        for record in records:
-            image = _pil_rgb(record["image_path"])
-            boxes = detect_faces_opencv(image, min_size=self.face_detector_min_size)
-            boxes = _select_small_boxes(boxes, image.size, self.small_face_fraction, self.max_faces_per_image)
-            if boxes:
-                filtered.append({**record, "bboxes": boxes})
+        skipped = 0
+        iterator = tqdm(records, desc="detect faces", unit="image")
+        for record in iterator:
+            try:
+                image = _pil_rgb(record["image_path"])
+                boxes = detect_faces_opencv(image, min_size=self.face_detector_min_size)
+                boxes = _select_small_boxes(boxes, image.size, self.small_face_fraction, self.max_faces_per_image)
+                if boxes:
+                    filtered.append({**record, "bboxes": boxes})
+                else:
+                    skipped += 1
+            except Exception:
+                skipped += 1
+            iterator.set_postfix({"kept": len(filtered), "skipped": skipped})
         if not filtered:
             raise RuntimeError(
                 "face_aug_preserve found no images with detectable faces. Check --image_dir, "
                 "--face_detector_min_size, or install/use a stronger detector before materializing canonical_jsonl."
             )
+        print(f"[face_aug_preserve] kept {len(filtered)} image(s) with detectable faces; skipped {skipped}")
         return filtered
 
     def _from_magicbrush(self, record: Dict[str, Any]) -> EditSample:

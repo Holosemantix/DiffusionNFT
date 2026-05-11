@@ -5,13 +5,15 @@ import os
 import random
 import zipfile
 from dataclasses import dataclass
+from glob import glob
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
-from PIL import Image, ImageFilter
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 from torch.utils.data import Dataset
 
+from flow_grpo.face_edit_losses import detect_faces_opencv
 from flow_grpo.flux2_train_utils import patch_torch_pytree_for_transformers
 
 patch_torch_pytree_for_transformers()
@@ -25,6 +27,28 @@ CANONICAL_FIELDS = {
     "mask_image": "PIL L image, white means editable/evaluated region",
     "instruction": "text instruction for image editing",
     "metadata": "dataset-specific metadata",
+}
+
+IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
+
+FACE_PRESERVE_PROMPTS = {
+    "restore": [
+        "[preserve face id] restore small or distant low-resolution faces while preserving the rest of the image",
+        "[preserve small faces] recover facial details and keep face identity unchanged",
+        "[face_identity_lock] enhance degraded small faces without changing the background",
+        "restore the small low-resolution face and preserve facial identity",
+    ],
+    "background": [
+        "[preserve face id] change the background appearance while keeping all faces unchanged",
+        "[preserve small faces] edit only non-face regions and keep facial identity fixed",
+        "[face_identity_lock] apply a background edit without altering small or distant faces",
+        "make a visual edit outside the face region and preserve all face identities",
+    ],
+    "noop": [
+        "[preserve face id] keep the image unchanged and preserve all small faces",
+        "[preserve small faces] preserve facial identity and do not edit the image",
+        "[face_identity_lock] keep distant faces identical and leave the image unchanged",
+    ],
 }
 
 
@@ -179,6 +203,21 @@ def _load_local_wider_face_records(root: str, split: str) -> List[Dict[str, Any]
     ]
 
 
+def _load_image_dir_records(root: str) -> List[Dict[str, Any]]:
+    root = os.path.abspath(root)
+    if not os.path.isdir(root):
+        raise FileNotFoundError(f"face_aug_preserve image_dir does not exist or is not a directory: {root}")
+
+    paths: List[str] = []
+    for ext in IMAGE_EXTENSIONS:
+        paths.extend(glob(os.path.join(root, "**", f"*{ext}"), recursive=True))
+        paths.extend(glob(os.path.join(root, "**", f"*{ext.upper()}"), recursive=True))
+    paths = sorted(set(paths))
+    if not paths:
+        raise FileNotFoundError(f"No images with extensions {IMAGE_EXTENSIONS!r} found under {root}")
+    return [{"image_path": path} for path in paths]
+
+
 def _resize_triplet(
     source: Image.Image,
     target: Image.Image,
@@ -264,6 +303,83 @@ def _select_small_boxes(
     return chosen[:max_boxes]
 
 
+def _parse_task_mix(spec: str) -> List[Tuple[str, float]]:
+    weights: List[Tuple[str, float]] = []
+    for item in spec.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if ":" not in item:
+            raise ValueError(f"Invalid task mix item {item!r}; expected name:weight")
+        name, raw_weight = item.split(":", 1)
+        name = name.strip()
+        if name not in FACE_PRESERVE_PROMPTS:
+            raise ValueError(f"Unsupported synthetic edit task {name!r}; expected one of {sorted(FACE_PRESERVE_PROMPTS)}")
+        weight = float(raw_weight)
+        if weight < 0:
+            raise ValueError(f"Task mix weight must be non-negative, got {item!r}")
+        if weight > 0:
+            weights.append((name, weight))
+    if not weights:
+        raise ValueError(f"Task mix {spec!r} contains no positive weights")
+    return weights
+
+
+def _weighted_choice(rng: random.Random, weights: Sequence[Tuple[str, float]]) -> str:
+    total = sum(weight for _, weight in weights)
+    point = rng.random() * total
+    upto = 0.0
+    for name, weight in weights:
+        upto += weight
+        if point <= upto:
+            return name
+    return weights[-1][0]
+
+
+def _choose_instruction(task: str, rng: random.Random, tag: str) -> str:
+    instruction = rng.choice(FACE_PRESERVE_PROMPTS[task])
+    if tag and tag not in instruction:
+        instruction = f"{tag} {instruction}"
+    return instruction
+
+
+def _soft_face_mask(face_mask: Image.Image, blur_radius: float = 2.0) -> Image.Image:
+    return face_mask.convert("L").filter(ImageFilter.GaussianBlur(blur_radius))
+
+
+def synthetic_background_edit(image: Image.Image, face_mask: Image.Image, rng: random.Random) -> Image.Image:
+    """Apply deterministic non-face edits, then paste original face regions back."""
+
+    image = image.convert("RGB")
+    op = rng.choice(["color", "exposure", "blur", "grayscale", "posterize", "noise", "tint"])
+    if op == "color":
+        edited = ImageEnhance.Color(image).enhance(rng.uniform(0.25, 1.9))
+        edited = ImageEnhance.Contrast(edited).enhance(rng.uniform(0.75, 1.35))
+    elif op == "exposure":
+        edited = ImageEnhance.Brightness(image).enhance(rng.uniform(0.65, 1.35))
+        edited = ImageEnhance.Contrast(edited).enhance(rng.uniform(0.8, 1.45))
+    elif op == "blur":
+        edited = image.filter(ImageFilter.GaussianBlur(rng.uniform(1.0, 3.0)))
+    elif op == "grayscale":
+        edited = ImageOps.grayscale(image).convert("RGB")
+        edited = ImageEnhance.Contrast(edited).enhance(rng.uniform(0.8, 1.4))
+    elif op == "posterize":
+        edited = ImageOps.posterize(image, bits=rng.choice([3, 4, 5]))
+    elif op == "noise":
+        arr = np.asarray(image).astype(np.float32)
+        np_rng = np.random.default_rng(rng.randrange(2**32))
+        arr = np.clip(arr + np_rng.normal(0.0, rng.uniform(8.0, 24.0), size=arr.shape), 0, 255)
+        edited = Image.fromarray(arr.astype(np.uint8), mode="RGB")
+    else:
+        color = tuple(rng.randrange(32, 224) for _ in range(3))
+        overlay = Image.new("RGB", image.size, color)
+        edited = Image.blend(image, overlay, alpha=rng.uniform(0.15, 0.35))
+
+    result = edited.convert("RGB")
+    result.paste(image, mask=_soft_face_mask(face_mask))
+    return result
+
+
 def degrade_face_regions(
     image: Image.Image,
     boxes: Sequence[Tuple[float, float, float, float]],
@@ -303,6 +419,7 @@ class FaceEditDataset(Dataset):
     Supported `source` values:
     - `magicbrush`: real instruction-edit triples from `osunlp/MagicBrush`.
     - `wider_face_restore`: WIDER FACE images turned into low-res-face restoration pairs.
+    - `face_aug_preserve`: local face images turned into synthetic preserve-ID edit pairs.
     - `canonical_jsonl`: materialized JSONL with canonical fields.
 
     The training contract is always:
@@ -316,12 +433,16 @@ class FaceEditDataset(Dataset):
         resolution: int = 512,
         cache_dir: Optional[str] = None,
         jsonl_path: Optional[str] = None,
+        image_dir: Optional[str] = None,
         wider_face_root: Optional[str] = None,
         max_samples: Optional[int] = None,
         seed: int = 42,
         small_face_fraction: float = 0.12,
         max_faces_per_image: int = 8,
         synthetic_task: str = "restore_lowres_small_face",
+        synthetic_edit_mix: str = "restore:0.4,background:0.4,noop:0.2",
+        face_detector_min_size: int = 8,
+        face_prompt_tag: str = "[preserve face id]",
     ):
         self.source = source
         self.split = split
@@ -332,6 +453,9 @@ class FaceEditDataset(Dataset):
         self.small_face_fraction = small_face_fraction
         self.max_faces_per_image = max_faces_per_image
         self.synthetic_task = synthetic_task
+        self.synthetic_edit_mix = _parse_task_mix(synthetic_edit_mix)
+        self.face_detector_min_size = face_detector_min_size
+        self.face_prompt_tag = face_prompt_tag
         self.records: Any
         self.jsonl_root = os.getcwd()
 
@@ -350,6 +474,10 @@ class FaceEditDataset(Dataset):
                 self.records = _load_local_wider_face_records(wider_face_root, hf_split)
             else:
                 self.records = _load_hf_dataset("CUHK-CSE/wider_face", split=hf_split, cache_dir=cache_dir)
+        elif source == "face_aug_preserve":
+            if not image_dir:
+                raise ValueError("image_dir is required for face_aug_preserve")
+            self.records = self._detect_face_image_records(_load_image_dir_records(image_dir))
         else:
             raise ValueError(f"Unsupported edit dataset source: {source}")
 
@@ -358,6 +486,21 @@ class FaceEditDataset(Dataset):
 
     def __len__(self) -> int:
         return len(self.records)
+
+    def _detect_face_image_records(self, records: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        filtered: List[Dict[str, Any]] = []
+        for record in records:
+            image = _pil_rgb(record["image_path"])
+            boxes = detect_faces_opencv(image, min_size=self.face_detector_min_size)
+            boxes = _select_small_boxes(boxes, image.size, self.small_face_fraction, self.max_faces_per_image)
+            if boxes:
+                filtered.append({**record, "bboxes": boxes})
+        if not filtered:
+            raise RuntimeError(
+                "face_aug_preserve found no images with detectable faces. Check --image_dir, "
+                "--face_detector_min_size, or install/use a stronger detector before materializing canonical_jsonl."
+            )
+        return filtered
 
     def _from_magicbrush(self, record: Dict[str, Any]) -> EditSample:
         source = _pil_rgb(record["source_img"])
@@ -396,6 +539,39 @@ class FaceEditDataset(Dataset):
             metadata={"dataset": "wider_face", "boxes_xywh": boxes, "synthetic_task": self.synthetic_task},
         )
 
+    def _from_face_aug_preserve(self, record: Dict[str, Any], idx: int) -> EditSample:
+        image = _pil_rgb(record["image_path"])
+        boxes = record["bboxes"]
+        face_mask = _box_mask(image.size, boxes)
+        rng = random.Random(self.seed + idx * 1009)
+        task = _weighted_choice(rng, self.synthetic_edit_mix)
+
+        if task == "restore":
+            source = degrade_face_regions(image, boxes)
+            target = image
+        elif task == "background":
+            source = image
+            target = synthetic_background_edit(image, face_mask, rng)
+        elif task == "noop":
+            source = image
+            target = image
+        else:
+            raise AssertionError(task)
+
+        return EditSample(
+            source_image=source,
+            target_image=target,
+            mask_image=face_mask,
+            instruction=_choose_instruction(task, rng, self.face_prompt_tag),
+            metadata={
+                "dataset": "face_aug_preserve",
+                "image_path": record["image_path"],
+                "boxes_xywh": boxes,
+                "synthetic_task": task,
+                "face_prompt_tag": self.face_prompt_tag,
+            },
+        )
+
     def _from_jsonl(self, record: Dict[str, Any]) -> EditSample:
         def resolve(path: str) -> str:
             return path if os.path.isabs(path) else os.path.join(self.jsonl_root, path)
@@ -411,6 +587,8 @@ class FaceEditDataset(Dataset):
             sample = self._from_magicbrush(record)
         elif self.source == "wider_face_restore":
             sample = self._from_wider_face(record)
+        elif self.source == "face_aug_preserve":
+            sample = self._from_face_aug_preserve(record, idx)
         elif self.source == "canonical_jsonl":
             sample = self._from_jsonl(record)
         else:

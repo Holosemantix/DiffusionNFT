@@ -4,6 +4,7 @@ Examples:
   python scripts/prepare_face_edit_data.py --source wider_face_restore --split train --output_dir data/face_edit/wider_train --max_samples 2000
   python scripts/prepare_face_edit_data.py --source wider_face_restore --wider_face_root /path/to/wider_face_zips --split train --output_dir data/face_edit/wider_train --max_samples 2000
   python scripts/prepare_face_edit_data.py --source magicbrush --split train --output_dir data/face_edit/magicbrush_train --max_samples 2000
+  python scripts/prepare_face_edit_data.py --source face_aug_preserve --image_dir /path/to/face_images --output_dir data/face_edit/face_aug_train
 """
 
 import argparse
@@ -17,13 +18,23 @@ from flow_grpo.editing_data import CANONICAL_FIELDS, FaceEditDataset
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source", default="wider_face_restore", choices=["wider_face_restore", "magicbrush"])
+    parser.add_argument("--source", default="wider_face_restore", choices=["wider_face_restore", "magicbrush", "face_aug_preserve"])
     parser.add_argument("--split", default="train")
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--cache_dir", default=None)
     parser.add_argument("--wider_face_root", default=None, help="Directory containing WIDER_train.zip/WIDER_val.zip and wider_face_split.zip")
+    parser.add_argument("--image_dir", default=None, help="Directory of ordinary face images for face_aug_preserve.")
     parser.add_argument("--resolution", type=int, default=512)
     parser.add_argument("--max_samples", type=int, default=None)
+    parser.add_argument(
+        "--synthetic_edit_mix",
+        default="restore:0.4,background:0.4,noop:0.2",
+        help="Task weights for face_aug_preserve, e.g. restore:0.4,background:0.4,noop:0.2.",
+    )
+    parser.add_argument("--face_detector_min_size", type=int, default=8,
+                        help="Minimum OpenCV-detected face size for face_aug_preserve filtering.")
+    parser.add_argument("--face_prompt_tag", default="[preserve face id]",
+                        help="Trigger tag prepended to preserve-ID synthetic instructions.")
     return parser.parse_args()
 
 
@@ -41,7 +52,11 @@ def main():
         resolution=args.resolution,
         cache_dir=args.cache_dir,
         wider_face_root=args.wider_face_root,
+        image_dir=args.image_dir,
         max_samples=args.max_samples,
+        synthetic_edit_mix=args.synthetic_edit_mix,
+        face_detector_min_size=args.face_detector_min_size,
+        face_prompt_tag=args.face_prompt_tag,
     )
 
     jsonl_path = os.path.join(args.output_dir, f"{args.split}.jsonl")

@@ -107,13 +107,14 @@ huggingface-cli login
 
 ## 3. 数据集处理详解
 
-### 3.1 三种数据源与处理方式
+### 3.1 四种数据源与处理方式
 
-所有 SFT/RL 脚本均通过 `flow_grpo.editing_data.FaceEditDataset` 读取数据，`--dataset_source` 支持三种值：
+所有 SFT/RL 脚本均通过 `flow_grpo.editing_data.FaceEditDataset` 读取数据，`--dataset_source` 支持以下值：
 
 | `dataset_source` | 用途 | 数据处理方式 |
 |------------------|------|--------------|
 | `wider_face_restore` | **推荐**的人脸修复起步数据 | 从 `CUHK-CSE/wider_face` 读取图片与人脸框，筛选小脸框，对框内区域做低清/JPEG/模糊退化；原图作为 target，退化图作为 source。 |
+| `face_aug_preserve` | 只有含脸图片、没有编辑对时的保 ID 合成数据 | 从本地 `--image_dir` 读普通图片，用 OpenCV Haar 检测人脸并过滤无脸图；随机生成小脸复原、非脸区域背景增强、no-op 保持三类样本，指令中加入 `[preserve face id]` 等触发词。 |
 | `magicbrush` | 通用图像编辑数据 | 从 `osunlp/MagicBrush` 读取真实的 `source_img / instruction / target_img / mask_img` 四元组。 |
 | `canonical_jsonl` | 已落盘的可复现实验数据 | 从 JSONL 读取统一字段，图片路径相对 JSONL 所在目录，也可使用绝对路径。 |
 
@@ -130,7 +131,39 @@ huggingface-cli login
    - JPEG 压缩（`jpeg_quality=28`）
 4. **Mask 生成** (`_box_mask`)：以人脸框为中心向外 padding，默认 padding 比例为 `0.35`，白色表示编辑区域。
 
-### 3.3 MagicBrush 通用编辑数据
+### 3.3 本地人脸图像的保 ID 合成编辑
+
+当只有一批包含人脸的普通图片、没有真实编辑前后对时，可使用 `face_aug_preserve`。它会先检测人脸框并过滤无脸图，再按 `--synthetic_edit_mix` 采样三类任务：
+
+| 任务 | 默认占比 | source / target 构造 | 训练意图 |
+|------|----------|----------------------|----------|
+| `restore` | `0.4` | source 为小脸退化图，target 为原图 | 学小脸细节复原。 |
+| `background` | `0.4` | source 为原图，target 为非脸区域颜色/曝光/模糊/噪声等合成编辑，脸区域 paste 回原图 | 学“编辑非脸区域时保持人脸身份”。 |
+| `noop` | `0.2` | source=target=原图 | 学到保 ID trigger 不应主动改脸。 |
+
+示例：
+
+```bash
+python scripts/prepare_face_edit_data.py \
+  --source face_aug_preserve \
+  --image_dir /path/to/face_images \
+  --output_dir data/face_edit/face_aug_train \
+  --resolution 512 \
+  --synthetic_edit_mix restore:0.4,background:0.4,noop:0.2 \
+  --face_prompt_tag "[preserve face id]"
+```
+
+也可以直接训练：
+
+```bash
+python scripts/train_face_edit_sft_flux2.py \
+  --dataset_source face_aug_preserve \
+  --image_dir /path/to/face_images \
+  --synthetic_edit_mix restore:0.4,background:0.4,noop:0.2 \
+  --face_prompt_tag "[preserve face id]"
+```
+
+### 3.4 MagicBrush 通用编辑数据
 
 MagicBrush 是真实图像编辑数据集，包含：
 - `source_img`：编辑前的原始图像
@@ -140,7 +173,7 @@ MagicBrush 是真实图像编辑数据集，包含：
 
 无需合成退化，直接按统一格式读取即可。
 
-### 3.4 canonical JSONL 统一格式
+### 3.5 canonical JSONL 统一格式
 
 物化后的每条样本是一个 JSON 对象，字段如下：
 
@@ -170,7 +203,7 @@ MagicBrush 是真实图像编辑数据集，包含：
 
 > **注意**：JSONL 中的相对路径是**相对于 JSONL 文件所在目录**，而非启动命令的工作目录。
 
-### 3.5 物化数据：从在线数据集到本地 JSONL
+### 3.6 物化数据：从在线数据集到本地 JSONL
 
 训练脚本可以直接在线读取 Hugging Face 数据集，但团队协作时强烈建议先物化数据，固定数据版本并避免每次训练时动态合成。
 
@@ -216,7 +249,7 @@ data/face_edit/wider_train/
 --jsonl_path data/face_edit/wider_train/train.jsonl
 ```
 
-### 3.6 快速数据检查
+### 3.7 快速数据检查
 
 建议先用小样本做端到端检查：
 

@@ -45,9 +45,14 @@ def parse_args():
     parser.add_argument("--flux2_ae_path", default=None, help="Local FLUX.2 autoencoder safetensors path")
     parser.add_argument("--flux2_text_encoder_path", default=None, help="Local FLUX.2 text encoder directory")
     parser.add_argument("--flux2_tokenizer_path", default=None, help="Local FLUX.2 tokenizer directory")
-    parser.add_argument("--dataset_source", default="wider_face_restore", choices=["wider_face_restore", "magicbrush", "canonical_jsonl"])
+    parser.add_argument(
+        "--dataset_source",
+        default="wider_face_restore",
+        choices=["wider_face_restore", "magicbrush", "canonical_jsonl", "face_aug_preserve"],
+    )
     parser.add_argument("--dataset_split", default="train")
     parser.add_argument("--jsonl_path", default=None)
+    parser.add_argument("--image_dir", default=None, help="Directory of ordinary face images for face_aug_preserve.")
     parser.add_argument("--cache_dir", default=None)
     parser.add_argument("--output_dir", default="logs/face_edit/sft_flux2")
     parser.add_argument("--resume_lora", default=None)
@@ -59,6 +64,15 @@ def parse_args():
     parser.add_argument("--gradient_accumulation_steps", type=int, default=4)
     parser.add_argument("--guidance", type=float, default=1.0)
     parser.add_argument("--source_mix", type=float, default=0.25)
+    parser.add_argument(
+        "--synthetic_edit_mix",
+        default="restore:0.4,background:0.4,noop:0.2",
+        help="Task weights for face_aug_preserve, e.g. restore:0.4,background:0.4,noop:0.2.",
+    )
+    parser.add_argument("--face_detector_min_size", type=int, default=8,
+                        help="Minimum OpenCV-detected face size for face_aug_preserve filtering.")
+    parser.add_argument("--face_prompt_tag", default="[preserve face id]",
+                        help="Trigger tag prepended to preserve-ID synthetic instructions.")
     parser.add_argument("--save_steps", type=int, default=500)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--debug_model", action="store_true")
@@ -99,7 +113,11 @@ def main():
         resolution=args.resolution,
         cache_dir=args.cache_dir,
         jsonl_path=args.jsonl_path,
+        image_dir=args.image_dir,
         max_samples=args.max_samples,
+        synthetic_edit_mix=args.synthetic_edit_mix,
+        face_detector_min_size=args.face_detector_min_size,
+        face_prompt_tag=args.face_prompt_tag,
     )
     dataloader = DataLoader(
         dataset,

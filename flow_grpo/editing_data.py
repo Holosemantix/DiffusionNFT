@@ -660,14 +660,15 @@ class FaceEditDataset(Dataset):
         rng = random.Random(self.seed + idx * 1009)
         task = _weighted_choice(rng, self.synthetic_edit_mix)
 
+        # Source is always the degraded (LQ) version; target is always the clean HQ version.
+        # Degradation is applied before any task-specific edit so the model learns to
+        # restore the face regardless of what other edit is being performed.
+        source = degrade_face_regions(image, boxes)
         if task == "restore":
-            source = degrade_face_regions(image, boxes)
             target = image
         elif task == "background":
-            source = image
             target = synthetic_background_edit(image, face_mask, rng)
         elif task == "noop":
-            source = image
             target = image
         else:
             raise AssertionError(task)

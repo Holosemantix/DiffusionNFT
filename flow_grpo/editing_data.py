@@ -553,6 +553,7 @@ class FaceEditDataset(Dataset):
         self.resolution = resolution
         self.cache_dir = cache_dir
         self.max_samples = max_samples
+        self.seed = seed
         self.rng = random.Random(seed)
         self.small_face_fraction = small_face_fraction
         self.max_faces_per_image = max_faces_per_image

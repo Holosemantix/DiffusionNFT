@@ -75,7 +75,7 @@ def parse_args():
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=4)
     parser.add_argument("--guidance", type=float, default=1.0)
-    parser.add_argument("--source_mix", type=float, default=0.25)
+    parser.add_argument("--source_mix", type=float, default=0.0)
     parser.add_argument(
         "--synthetic_edit_mix",
         default="restore:0.4,background:0.4,noop:0.2",
@@ -193,13 +193,16 @@ def main():
             iterator.set_postfix({"loss": float(edit_loss.detach())})
             global_step += 1
 
-            if args.viz_every > 0 and viz_batch is None:
+            if args.viz_every > 0:
                 k = max(1, min(args.viz_batch_size, source.shape[0]))
-                viz_batch = {
-                    "source": source[:k].detach().clone(),
-                    "target": target[:k].detach().clone(),
-                    "instructions": list(prompts[:k]),
-                }
+                # Refresh viz_batch every viz interval so we see varied samples over training.
+                # On non-viz steps, keep the last cached batch (so viz_batch is always available).
+                if viz_batch is None or global_step % args.viz_every == 0:
+                    viz_batch = {
+                        "source": source[:k].detach().clone(),
+                        "target": target[:k].detach().clone(),
+                        "instructions": list(prompts[:k]),
+                    }
 
             if args.viz_every > 0 and global_step % args.viz_every == 0 and viz_batch is not None:
                 viz_path = os.path.join(viz_dir, f"step_{global_step:06d}.png")
